@@ -62,7 +62,7 @@ drops a shortcut in your Startup folder - no scheduled task, no admin rights).
 | **Start at login** | Adds/removes a Startup folder shortcut. |
 | **Stay on for** | Auto-disarm after 15 min / 1 hour / 4 hours, or stay on until you say otherwise. |
 | **Speed** | Poll interval: 150ms / 250ms / 750ms. |
-| **Notify on approve** | Windows toast whenever it clicks, so approvals are never invisible. |
+| **Approve notice** | How approvals are announced: floating puffs (default), a toast card, or silent. |
 | **Pause on burst** | Stop and alert after 15 approvals in a minute. |
 | **Observe only** | Log the dialogs but don't click - useful for a first look. |
 | **Include Microsoft Edge** | Watch Edge windows too. |
@@ -101,9 +101,35 @@ Three details that matter if you're reimplementing this:
   tree for a moment and will otherwise be "approved" again.
 
 The Python side never touches UI Automation. It supervises the engine process,
-tails its log to drive the counter, toasts, and burst guard, and writes
+tails its log to drive the counter, notices, and burst guard, and writes
 `config.json`. Options that the engine only reads at startup restart it
 automatically.
+
+### The puffs
+
+A toast card per approval is worse than the problem when approvals fire dozens
+of times an hour, so the default notice is a small translucent cloud that drifts
+up from the tray and fades out. Position, size, rise speed, drift, lifetime and
+release delay are all jittered, so a burst scatters instead of stacking. The
+windows are layered, click-through and non-activating - they never take focus or
+swallow a click. Warnings (burst guard, auto-disarm) still use a real toast,
+because those carry text you need to read.
+
+Two Windows quirks cost real time here and are worth knowing if you touch
+`puffs.py`:
+
+- **Tk will not paint from a worker thread.** Toplevels created off the main
+  thread are reported visible by `IsWindowVisible`, sit at the right
+  coordinates, and render solid black. Identical code on the main thread paints
+  fine. Since pystray owns the parent's main thread, the overlay runs as its own
+  small process (`puffs.py --serve`) that takes one integer per line on stdin.
+- **Order matters around `SetWindowLongW`.** Applying the click-through ex-style
+  to a window that has not been realized yet drops its layered attributes and it
+  stays invisible forever. Call `update_idletasks()` first, then set the style,
+  then re-assert `-alpha` and `-transparentcolor`.
+
+Set `YESDEV_DEBUG=1` to have the overlay log spawns and failures to
+`%LOCALAPPDATA%\YesDev\puffs.log`.
 
 ## Files
 

@@ -26,10 +26,13 @@ APP_NAME = "Yes, Dev"
 APP_SLUG = "yes-dev"
 
 BASE = Path(__file__).resolve().parent
+if str(BASE) not in sys.path:
+    sys.path.insert(0, str(BASE))   # so `import puffs` works however we were launched
 WATCHER = BASE / "watcher.ps1"
 DATA_DIR = Path(os.environ.get("LOCALAPPDATA", Path.home())) / "YesDev"
 CONFIG_PATH = DATA_DIR / "config.json"
 LOG_PATH = DATA_DIR / f"{APP_SLUG}.log"
+TRAY_LOG = DATA_DIR / "tray.log"
 STARTUP_LNK = (
     Path.home() / "AppData" / "Roaming" / "Microsoft" / "Windows"
     / "Start Menu" / "Programs" / "Startup" / f"{APP_NAME}.lnk"
@@ -42,7 +45,9 @@ DEFAULTS = {
     "observe_only": False,
     "poll_ms": 250,
     "include_edge": False,
-    "notify_on_approve": True,
+    # How routine approvals are announced: "puffs", "toast" or "none".
+    # Warnings (burst guard, auto-disarm) always use a toast - they carry text.
+    "notify_style": "puffs",
     "burst_guard": True,
     # Minutes to stay armed before disarming automatically; 0 = until turned off.
     "arm_minutes": 0,
@@ -53,6 +58,23 @@ BURST_WINDOW = 60.0    # seconds
 
 POLL_CHOICES = [("Snappy (150ms)", 150), ("Normal (250ms)", 250), ("Relaxed (750ms)", 750)]
 ARM_CHOICES = [("Until I turn it off", 0), ("15 minutes", 15), ("1 hour", 60), ("4 hours", 240)]
+NOTIFY_CHOICES = [
+    ("Floating puffs", "puffs"),
+    ("Toast card", "toast"),
+    ("Silent", "none"),
+]
+
+
+def log(message: str) -> None:
+    """Tray-side log. Under pythonw there is no console, so failures are invisible
+    without this - the puff overlay in particular fails quietly if Tk is unhappy."""
+    try:
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        with TRAY_LOG.open("a", encoding="utf-8") as fh:
+            fh.write(f"{stamp} {message}\n")
+    except Exception:
+        pass
 
 
 def run_hidden(args: list[str]) -> subprocess.CompletedProcess:
@@ -68,6 +90,13 @@ class Config(dict):
             self.update(json.loads(CONFIG_PATH.read_text(encoding="utf-8")))
         except Exception:
             pass  # first run, or a hand-edit we can't parse - fall back to defaults
+
+        # Config from before puffs existed carried a notify_on_approve bool.
+        old = self.pop("notify_on_approve", None)
+        if old is not None and "notify_style" not in self:
+            self["notify_style"] = "puffs" if old else "none"
+        if self.get("notify_style") not in {"puffs", "toast", "none"}:
+            self["notify_style"] = DEFAULTS["notify_style"]
 
     def save(self) -> None:
         try:
@@ -88,6 +117,7 @@ class YesDev:
         self.icon: pystray.Icon | None = None
         self._log_pos = 0
         self._lock = threading.Lock()
+        self._puffs = None            # built on first use; Tk costs a thread
 
     # ---------- engine lifetime ----------
 
@@ -111,6 +141,7 @@ class YesDev:
         # Only surface approvals logged from here on, not the whole history.
         self._log_pos = LOG_PATH.stat().st_size if LOG_PATH.exists() else 0
         self.proc = subprocess.Popen(args, creationflags=CREATE_NO_WINDOW)
+        log(f"engine started pid={self.proc.pid} log_pos={self._log_pos}")
 
         mins = int(self.cfg["arm_minutes"] or 0)
         self.disarm_at = datetime.now() + timedelta(minutes=mins) if mins else None
@@ -133,11 +164,13 @@ class YesDev:
     # ---------- background loop ----------
 
     def monitor(self) -> None:
+        log("monitor thread started")
         while True:
             try:
                 self._tick()
             except Exception:
-                pass
+                import traceback
+                log(f"tick error: {traceback.format_exc()}")
             time.sleep(1.0)
 
     def _tick(self) -> None:
@@ -158,9 +191,11 @@ class YesDev:
             self._log_pos = 0                    # log was rotated or cleared
         if size == self._log_pos:
             return
-        with LOG_PATH.open("r", encoding="utf-8", errors="replace") as fh:
+        # Binary, not text: the engine's log is UTF-8-with-BOM and CRLF, and byte
+        # offsets from stat() are only meaningful against a binary stream.
+        with LOG_PATH.open("rb") as fh:
             fh.seek(self._log_pos)
-            chunk = fh.read()
+            chunk = fh.read().decode("utf-8", errors="replace")
             self._log_pos = fh.tell()
 
         hits = sum(1 for line in chunk.splitlines() if "[ACTION]" in line)
@@ -179,10 +214,33 @@ class YesDev:
                 f"Paused: {len(self.recent)} approvals in under a minute. "
                 f"Turn {APP_NAME} back on if that was expected."
             )
-        elif self.cfg["notify_on_approve"]:
-            self.notify(f"Approved {hits} debugging request{'s' if hits > 1 else ''}")
+        else:
+            self.announce(hits)
 
         self.refresh()
+
+    def announce(self, hits: int) -> None:
+        """Routine approvals: a puff per approval, a toast, or nothing."""
+        style = self.cfg["notify_style"]
+        log(f"announce hits={hits} style={style}")
+        if style == "toast":
+            self.notify(f"Approved {hits} debugging request{'s' if hits > 1 else ''}")
+        elif style == "puffs":
+            overlay = self.puff_overlay()
+            if overlay is not None:
+                overlay.emit(hits)
+                log(f"  emitted {hits} puff(s)")
+
+    def puff_overlay(self):
+        if self._puffs is None:
+            try:
+                import puffs
+                self._puffs = puffs.PuffClient(log=log)
+            except Exception:
+                import traceback
+                log(f"  puff client FAILED: {traceback.format_exc()}")
+                self._puffs = False   # unavailable; don't retry on every approval
+        return self._puffs or None
 
     def _pause(self, reason: str) -> None:
         self.paused_reason = reason
@@ -313,6 +371,8 @@ class YesDev:
 
     def quit(self) -> None:
         self.stop_engine()
+        if self._puffs:
+            self._puffs.shutdown()
         if self.icon:
             self.icon.stop()
 
@@ -337,9 +397,12 @@ class YesDev:
                   checked=lambda _, v=val: self.cfg["poll_ms"] == v, radio=True)
                 for label, val in POLL_CHOICES
             ])),
+            I("Approve notice", M(*[
+                I(label, lambda _, v=val: self.set_value("notify_style", v)(),
+                  checked=lambda _, v=val: self.cfg["notify_style"] == v, radio=True)
+                for label, val in NOTIFY_CHOICES
+            ])),
             I("Options", M(
-                I("Notify on approve", lambda _: self.toggle("notify_on_approve")(),
-                  checked=lambda _: self.cfg["notify_on_approve"]),
                 I(f"Pause on burst ({BURST_LIMIT}/min)", lambda _: self.toggle("burst_guard")(),
                   checked=lambda _: self.cfg["burst_guard"]),
                 I("Observe only (log, don't click)",
