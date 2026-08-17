@@ -30,8 +30,14 @@ On a single-user dev machine that's usually a fine trade. It is still a real
 reduction in protection, so `Yes, Dev` ships with two mitigations on by default:
 
 - **Stay on for** a fixed window (15 min / 1 hour / 4 hours), then it disarms itself.
-- **Burst guard** pauses everything and alerts you if approvals spike past 15 in
-  a minute, which is roughly what a runaway loop or a hostile process looks like.
+- **Burst guard** pauses and alerts you if approvals spike past 60 in a minute,
+  which is well clear of normal load but far below a runaway loop. It re-arms
+  itself after a minute, because a guard that waits for a human recreates the
+  exact problem this tool exists to solve.
+
+The 60/min default is measured, not guessed: several agents working in parallel
+peaked at 15 approvals in the busiest minute of a real session. Set your own
+limit from the tray if your workload is heavier.
 
 If you only need automation against a *throwaway* profile, you don't need this at
 all: launch Chrome with its own `--user-data-dir` and it never prompts. This tool
@@ -63,7 +69,7 @@ drops a shortcut in your Startup folder - no scheduled task, no admin rights).
 | **Stay on for** | Auto-disarm after 15 min / 1 hour / 4 hours, or stay on until you say otherwise. |
 | **Speed** | Poll interval: 150ms / 250ms / 750ms. |
 | **Approve notice** | How approvals are announced: floating puffs (default), a toast card, or silent. |
-| **Pause on burst** | Stop and alert after 15 approvals in a minute. |
+| **Pause on burst** | Pause and alert past 30 / 60 / 120 approvals a minute, or off. Re-arms itself after a minute. |
 | **Observe only** | Log the dialogs but don't click - useful for a first look. |
 | **Include Microsoft Edge** | Watch Edge windows too. |
 | **Open log / Open config** | `%LOCALAPPDATA%\YesDev\` |

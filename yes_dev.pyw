@@ -48,13 +48,17 @@ DEFAULTS = {
     # How routine approvals are announced: "puffs", "toast" or "none".
     # Warnings (burst guard, auto-disarm) always use a toast - they carry text.
     "notify_style": "puffs",
-    "burst_guard": True,
+    # Approvals per minute before pausing; 0 disables the guard. Measured normal
+    # load for several parallel agents peaks around 15/min, so this leaves real
+    # headroom while still catching a runaway loop (which runs orders higher).
+    "burst_limit": 60,
     # Minutes to stay armed before disarming automatically; 0 = until turned off.
     "arm_minutes": 0,
 }
 
-BURST_LIMIT = 15       # approvals within BURST_WINDOW before auto-pausing
 BURST_WINDOW = 60.0    # seconds
+BURST_COOLDOWN = 60.0  # auto-resume after this long, rather than stranding agents
+BURST_CHOICES = [("Off", 0), ("30 / min", 30), ("60 / min", 60), ("120 / min", 120)]
 
 POLL_CHOICES = [("Snappy (150ms)", 150), ("Normal (250ms)", 250), ("Relaxed (750ms)", 750)]
 ARM_CHOICES = [("Until I turn it off", 0), ("15 minutes", 15), ("1 hour", 60), ("4 hours", 240)]
@@ -86,10 +90,14 @@ def run_hidden(args: list[str]) -> subprocess.CompletedProcess:
 class Config(dict):
     def __init__(self) -> None:
         super().__init__(DEFAULTS)
-        try:
-            self.update(json.loads(CONFIG_PATH.read_text(encoding="utf-8")))
-        except Exception:
-            pass  # first run, or a hand-edit we can't parse - fall back to defaults
+        if CONFIG_PATH.exists():
+            try:
+                # utf-8-sig, not utf-8: Notepad and PowerShell's -Encoding utf8 both
+                # write a BOM, and a plain utf-8 read would reject the whole file and
+                # silently reset every setting to its default.
+                self.update(json.loads(CONFIG_PATH.read_text(encoding="utf-8-sig")))
+            except Exception as exc:
+                log(f"config unreadable ({exc!r}) - using defaults")
 
         # Config from before puffs existed carried a notify_on_approve bool.
         old = self.pop("notify_on_approve", None)
@@ -97,6 +105,16 @@ class Config(dict):
             self["notify_style"] = "puffs" if old else "none"
         if self.get("notify_style") not in {"puffs", "toast", "none"}:
             self["notify_style"] = DEFAULTS["notify_style"]
+
+        # The guard used to be an on/off flag with a fixed limit of 15/min, which
+        # sat right on top of normal multi-agent load.
+        guard = self.pop("burst_guard", None)
+        if guard is not None and "burst_limit" not in self:
+            self["burst_limit"] = DEFAULTS["burst_limit"] if guard else 0
+        try:
+            self["burst_limit"] = max(0, int(self["burst_limit"]))
+        except (TypeError, ValueError):
+            self["burst_limit"] = DEFAULTS["burst_limit"]
 
     def save(self) -> None:
         try:
@@ -114,6 +132,7 @@ class YesDev:
         self.recent: deque[float] = deque()      # timestamps, for the burst guard
         self.disarm_at: datetime | None = None
         self.paused_reason: str | None = None
+        self.resume_at: datetime | None = None
         self.icon: pystray.Icon | None = None
         self._log_pos = 0
         self._lock = threading.Lock()
@@ -175,6 +194,15 @@ class YesDev:
 
     def _tick(self) -> None:
         with self._lock:
+            # A burst pause is a speed bump, not a stop: re-arm on its own so a
+            # busy stretch never leaves agents waiting on a human again.
+            if self.paused_reason and self.resume_at and datetime.now() >= self.resume_at:
+                log(f"auto-resumed after {self.paused_reason}")
+                self.paused_reason = None
+                self.resume_at = None
+                self.recent.clear()
+                self.notify(f"{APP_NAME} is back on")
+
             if self.cfg["enabled"] and not self.paused_reason:
                 if not self.engine_running():
                     self.start_engine()          # first run, or engine died - restart it
@@ -208,11 +236,16 @@ class YesDev:
         while self.recent and now - self.recent[0] > BURST_WINDOW:
             self.recent.popleft()
 
-        if self.cfg["burst_guard"] and len(self.recent) >= BURST_LIMIT:
-            self._pause("burst guard")
+        if self.paused_reason:
+            return   # already paused; keep consuming the log but don't re-pause,
+                     # which would keep pushing the auto-resume further out
+
+        limit = self.cfg["burst_limit"]
+        if limit and len(self.recent) >= limit:
+            self._pause("burst guard", resume_after=BURST_COOLDOWN)
             self.notify(
                 f"Paused: {len(self.recent)} approvals in under a minute. "
-                f"Turn {APP_NAME} back on if that was expected."
+                f"Resuming automatically in {int(BURST_COOLDOWN)}s."
             )
         else:
             self.announce(hits)
@@ -242,8 +275,11 @@ class YesDev:
                 self._puffs = False   # unavailable; don't retry on every approval
         return self._puffs or None
 
-    def _pause(self, reason: str) -> None:
+    def _pause(self, reason: str, resume_after: float | None = None) -> None:
         self.paused_reason = reason
+        self.resume_at = (datetime.now() + timedelta(seconds=resume_after)
+                          if resume_after else None)
+        log(f"PAUSED ({reason})" + (f", auto-resume in {int(resume_after)}s" if resume_after else ""))
         self.stop_engine()
         self.refresh()
 
@@ -300,6 +336,7 @@ class YesDev:
         with self._lock:
             self.cfg["enabled"] = not self.cfg["enabled"]
             self.paused_reason = None
+            self.resume_at = None
             self.recent.clear()
             self.cfg.save()
             self.start_engine() if self.cfg["enabled"] else self.stop_engine()
@@ -353,7 +390,9 @@ class YesDev:
 
     def status_text(self, _item) -> str:
         bits = [f"Status: {self.state()}"]
-        if self.disarm_at and not self.paused_reason:
+        if self.resume_at:
+            bits.append(f"back in {max(0, int((self.resume_at - datetime.now()).total_seconds()))}s")
+        elif self.disarm_at and not self.paused_reason:
             left = int((self.disarm_at - datetime.now()).total_seconds() // 60) + 1
             bits.append(f"{left} min left")
         return "  -  ".join(bits)
@@ -402,9 +441,12 @@ class YesDev:
                   checked=lambda _, v=val: self.cfg["notify_style"] == v, radio=True)
                 for label, val in NOTIFY_CHOICES
             ])),
+            I("Pause on burst", M(*[
+                I(label, lambda _, v=val: self.set_value("burst_limit", v)(),
+                  checked=lambda _, v=val: self.cfg["burst_limit"] == v, radio=True)
+                for label, val in BURST_CHOICES
+            ])),
             I("Options", M(
-                I(f"Pause on burst ({BURST_LIMIT}/min)", lambda _: self.toggle("burst_guard")(),
-                  checked=lambda _: self.cfg["burst_guard"]),
                 I("Observe only (log, don't click)",
                   lambda _: self.toggle("observe_only", restart=True)(),
                   checked=lambda _: self.cfg["observe_only"]),
