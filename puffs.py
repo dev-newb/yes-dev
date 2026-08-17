@@ -22,6 +22,7 @@ import random
 import subprocess
 import sys
 import threading
+import time
 import tkinter as tk
 from pathlib import Path
 
@@ -73,19 +74,28 @@ def _make_click_through(win: tk.Toplevel) -> None:
 
 
 class _Puff:
-    """One cloud: rises, drifts sideways a little, fades out, then destroys itself."""
+    """One cloud: rises, drifts sideways a little, fades out, then destroys itself.
+
+    Motion is a function of elapsed time, not of frame count, so a dropped frame
+    shortens nothing and the drift speed looks the same whatever rate we achieve.
+    """
 
     def __init__(self, root: tk.Tk) -> None:
         area = _work_area()
         self.size = random.randint(26, 46)
-        self.alpha = random.uniform(0.55, 0.80)
-        self.fade = self.alpha / random.uniform(95, 150)   # frames to live
-        self.rise = random.uniform(0.8, 1.7)
-        self.drift = random.uniform(-0.35, 0.35)
+        self.alpha0 = random.uniform(0.55, 0.80)
+        self.life = random.uniform(1.7, 2.7)               # seconds
+        self.rise = random.uniform(45.0, 95.0)             # px/sec
+        self.drift = random.uniform(-22.0, 22.0)           # px/sec
+        self.born = time.perf_counter()
 
         # Anchor near the tray, with enough spread that a burst never stacks.
-        self.x = float(area.right - random.randint(60, 210))
-        self.y = float(area.bottom - random.randint(45, 120))
+        self.x0 = float(area.right - random.randint(60, 210))
+        self.y0 = float(area.bottom - random.randint(45, 120))
+        self.x, self.y = self.x0, self.y0
+        self.alpha = self.alpha0
+        self._shown = (int(self.x0), int(self.y0))
+        self._alpha_set = self.alpha0
 
         self.win = tk.Toplevel(root)
         self.win.overrideredirect(True)
@@ -107,7 +117,7 @@ class _Puff:
             canvas.create_oval(s * box[0], s * box[1], s * box[2], s * box[3],
                                fill=CLOUD_FILL, outline=CLOUD_EDGE, width=1)
 
-        self.win.geometry(f"{s}x{s}+{int(self.x)}+{int(self.y)}")
+        self.win.geometry(f"{s}x{s}+{int(self.x0)}+{int(self.y0)}")
         # Realize and paint BEFORE touching the ex-style. Changing ex-style on a
         # not-yet-realized layered window drops its layered attributes and the
         # window stays invisible forever, so re-assert them afterwards too.
@@ -119,17 +129,27 @@ class _Puff:
         except tk.TclError:
             pass
 
-    def step(self) -> bool:
-        """Advance one frame. Returns False once the puff is gone."""
-        self.alpha -= self.fade
-        if self.alpha <= 0.02:
+    def step(self, now: float) -> bool:
+        """Advance to wall-clock `now`. Returns False once the puff is gone."""
+        t = now - self.born
+        if t >= self.life:
             self.destroy()
             return False
-        self.y -= self.rise
-        self.x += self.drift
+
+        frac = t / self.life
+        self.alpha = self.alpha0 * (1.0 - frac) ** 1.6     # ease out, lingers then goes
+        self.x = self.x0 + self.drift * t
+        self.y = self.y0 - self.rise * t
+
         try:
-            self.win.attributes("-alpha", self.alpha)
-            self.win.geometry(f"+{int(self.x)}+{int(self.y)}")
+            # Both of these are Win32 round trips; skip the ones that would be no-ops.
+            pos = (int(self.x), int(self.y))
+            if pos != self._shown:
+                self.win.geometry(f"+{pos[0]}+{pos[1]}")
+                self._shown = pos
+            if abs(self.alpha - self._alpha_set) >= 0.008:
+                self.win.attributes("-alpha", self.alpha)
+                self._alpha_set = self.alpha
         except tk.TclError:
             return False
         return True
@@ -156,6 +176,14 @@ def _debug(message: str) -> None:
 
 def serve() -> None:
     """Run the overlay, taking one integer per line on stdin. Tk owns this thread."""
+    # Windows' default timer granularity is ~15.6ms, so after(16) actually lands
+    # around 31ms and the animation runs at half the intended rate. Ask for 1ms
+    # while the overlay is alive; it is released again on the way out.
+    try:
+        ctypes.windll.winmm.timeBeginPeriod(1)
+    except Exception:
+        pass
+
     try:
         root = tk.Tk()
         root.withdraw()
@@ -163,6 +191,10 @@ def serve() -> None:
     except Exception:
         import traceback
         _debug(f"serve: Tk FAILED {traceback.format_exc()}")
+        try:
+            ctypes.windll.winmm.timeEndPeriod(1)
+        except Exception:
+            pass
         return
 
     pending: queue.Queue[int | None] = queue.Queue()
@@ -204,7 +236,14 @@ def serve() -> None:
             delayed[0] += 1
             root.after(delay, release)
 
+    timing = {"last": None, "gaps": [], "work": []}
+
     def tick() -> None:
+        t0 = time.perf_counter()
+        if timing["last"] is not None and live:
+            timing["gaps"].append((t0 - timing["last"]) * 1000)
+        timing["last"] = t0
+
         stop = False
         try:
             while True:
@@ -216,18 +255,36 @@ def serve() -> None:
         except queue.Empty:
             pass
 
-        live[:] = [p for p in live if p.step()]
+        n = len(live)
+        live[:] = [p for p in live if p.step(t0)]
+        work_ms = (time.perf_counter() - t0) * 1000
+        if n:
+            timing["work"].append(work_ms)
 
         if stop and not live and not delayed[0]:
+            if timing["gaps"]:
+                gaps = sorted(timing["gaps"])
+                work = sorted(timing["work"])
+                _debug(f"frames={len(gaps)} gap_ms median={gaps[len(gaps) // 2]:.1f} "
+                       f"p95={gaps[int(len(gaps) * 0.95)]:.1f} max={gaps[-1]:.1f} | "
+                       f"work_ms median={work[len(work) // 2]:.2f} max={work[-1]:.2f}")
             root.quit()
             return
-        root.after(FRAME_MS, tick)
+
+        # after() waits N ms *after* this callback returns, so subtract the work to
+        # keep a steady cadence rather than drifting to work+N.
+        root.after(max(1, round(FRAME_MS - work_ms)), tick)
 
     root.after(FRAME_MS, tick)
     try:
         root.mainloop()
     except Exception:
         pass
+    finally:
+        try:
+            ctypes.windll.winmm.timeEndPeriod(1)
+        except Exception:
+            pass
 
 
 class PuffClient:
