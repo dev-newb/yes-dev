@@ -40,7 +40,8 @@ COLOR_KEY = "#010203"
 CLOUD_FILL = "#dcebff"
 CLOUD_EDGE = "#7aa7e0"   # keeps the shape readable on light backgrounds too
 
-FRAME_MS = 16          # ~60fps
+FRAME_MS = 16          # ~60fps while animating
+IDLE_MS = 120          # cheap heartbeat while waiting for the next approval
 MAX_LIVE = 40          # hard cap, so a runaway loop can't spawn endless windows
 
 
@@ -82,11 +83,15 @@ class _Puff:
 
     def __init__(self, root: tk.Tk) -> None:
         area = _work_area()
+        # These are the original hand-tuned values, converted from per-frame to
+        # per-second at the ~33fps the loop actually used to run at. Keep them in
+        # seconds and px/sec: a faster, shorter-lived cloud is easy to miss over a
+        # remote desktop, where only a fraction of frames ever reach the viewer.
         self.size = random.randint(26, 46)
         self.alpha0 = random.uniform(0.55, 0.80)
-        self.life = random.uniform(1.7, 2.7)               # seconds
-        self.rise = random.uniform(45.0, 95.0)             # px/sec
-        self.drift = random.uniform(-22.0, 22.0)           # px/sec
+        self.life = random.uniform(2.9, 4.5)               # seconds
+        self.rise = random.uniform(26.0, 56.0)             # px/sec
+        self.drift = random.uniform(-12.0, 12.0)           # px/sec
         self.born = time.perf_counter()
 
         # Anchor near the tray, with enough spread that a burst never stacks.
@@ -137,7 +142,7 @@ class _Puff:
             return False
 
         frac = t / self.life
-        self.alpha = self.alpha0 * (1.0 - frac) ** 1.6     # ease out, lingers then goes
+        self.alpha = self.alpha0 * (1.0 - frac)            # linear, as originally tuned
         self.x = self.x0 + self.drift * t
         self.y = self.y0 - self.rise * t
 
@@ -178,11 +183,21 @@ def serve() -> None:
     """Run the overlay, taking one integer per line on stdin. Tk owns this thread."""
     # Windows' default timer granularity is ~15.6ms, so after(16) actually lands
     # around 31ms and the animation runs at half the intended rate. Ask for 1ms
-    # while the overlay is alive; it is released again on the way out.
-    try:
-        ctypes.windll.winmm.timeBeginPeriod(1)
-    except Exception:
-        pass
+    # while clouds are on screen - but only then, since a raised timer resolution
+    # costs power and this process outlives every animation by a long way.
+    hires = [False]
+
+    def set_hires(on: bool) -> None:
+        if on == hires[0]:
+            return
+        try:
+            if on:
+                ctypes.windll.winmm.timeBeginPeriod(1)
+            else:
+                ctypes.windll.winmm.timeEndPeriod(1)
+            hires[0] = on
+        except Exception:
+            pass
 
     try:
         root = tk.Tk()
@@ -191,10 +206,6 @@ def serve() -> None:
     except Exception:
         import traceback
         _debug(f"serve: Tk FAILED {traceback.format_exc()}")
-        try:
-            ctypes.windll.winmm.timeEndPeriod(1)
-        except Exception:
-            pass
         return
 
     pending: queue.Queue[int | None] = queue.Queue()
@@ -271,9 +282,13 @@ def serve() -> None:
             root.quit()
             return
 
+        # Animate at full rate only while there is something to animate; otherwise
+        # idle cheaply until the next approval arrives.
+        busy = bool(live) or delayed[0] > 0
+        set_hires(busy)
         # after() waits N ms *after* this callback returns, so subtract the work to
         # keep a steady cadence rather than drifting to work+N.
-        root.after(max(1, round(FRAME_MS - work_ms)), tick)
+        root.after(max(1, round(FRAME_MS - work_ms)) if busy else IDLE_MS, tick)
 
     root.after(FRAME_MS, tick)
     try:
@@ -281,10 +296,7 @@ def serve() -> None:
     except Exception:
         pass
     finally:
-        try:
-            ctypes.windll.winmm.timeEndPeriod(1)
-        except Exception:
-            pass
+        set_hires(False)
 
 
 class PuffClient:
