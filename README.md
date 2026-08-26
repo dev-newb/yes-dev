@@ -10,6 +10,15 @@ clicks Allow. `Yes, Dev` sits in the tray and answers them.
 Measured on Chrome 151: four parallel attaches went from ~35 seconds of waiting
 on a human to **2.4-4.4 seconds**, unattended.
 
+![Floating puffs drifting up from the tray](docs/puffs.png)
+
+*Each approval releases one cloud, which rises and fades. Shown here against a
+plain backdrop; on a real desktop they drift over whatever is behind them.*
+
+**Field data**, from the machine it was built on: 454 approvals over 8 days,
+one failed click (99.8% success), no runaway pauses, and it came back by itself
+after a reboot.
+
 ## Why not just turn the prompt off?
 
 You can't. There's no flag, no policy, no "remember my choice". The
@@ -143,14 +152,34 @@ Set `YESDEV_DEBUG=1` to have the overlay log spawns and failures to
 |---|---|
 | `yes_dev.pyw` | Tray UI, engine supervisor, config |
 | `watcher.ps1` | The UI Automation engine. Runs standalone too. |
+| `puffs.py` | The cloud overlay. Runs as its own process. |
 | `%LOCALAPPDATA%\YesDev\config.json` | Settings |
-| `%LOCALAPPDATA%\YesDev\yes-dev.log` | Activity log |
+| `%LOCALAPPDATA%\YesDev\yes-dev.log` | Approvals, from the engine |
+| `%LOCALAPPDATA%\YesDev	ray.log` | Tray-side events and errors |
+
+Both logs roll over at 1MB, keeping one previous generation.
 
 Run the engine by itself if you'd rather not have a tray at all:
 
 ```bash
 powershell -NoProfile -ExecutionPolicy Bypass -File watcher.ps1 -Observe
 ```
+
+## Known limitations
+
+- **English Chrome only.** The dialog is matched by its title, "Allow remote
+  debugging?", and the button by its label. A localised Chrome uses translated
+  strings and nothing will match. Both are parameters on `watcher.ps1`
+  (`-DialogPattern`, `-ApprovePattern`), so a translated build needs only new
+  patterns - but the tray does not expose them yet.
+- **Matched by string, so a Chrome rename breaks it.** If a future Chrome
+  retitles the dialog, approvals silently stop. The log still records dialogs it
+  found but could not act on, so `-Observe` will tell you quickly.
+- **Clouds anchor to the primary monitor** and are positioned in unscaled
+  pixels. Tested on a single 1920x1080 display at 100% scale; on a scaled or
+  multi-monitor setup they may land somewhere unhelpful. The approving itself is
+  resolution-independent and unaffected.
+- **Windows only**, by construction - it is built on UI Automation.
 
 ## License
 

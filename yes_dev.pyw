@@ -74,6 +74,8 @@ def log(message: str) -> None:
     without this - the puff overlay in particular fails quietly if Tk is unhappy."""
     try:
         DATA_DIR.mkdir(parents=True, exist_ok=True)
+        if TRAY_LOG.exists() and TRAY_LOG.stat().st_size > 1_000_000:
+            TRAY_LOG.replace(TRAY_LOG.with_name(TRAY_LOG.name + ".1"))
         stamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         with TRAY_LOG.open("a", encoding="utf-8") as fh:
             fh.write(f"{stamp} {message}\n")
@@ -221,10 +223,15 @@ class YesDev:
             return
         # Binary, not text: the engine's log is UTF-8-with-BOM and CRLF, and byte
         # offsets from stat() are only meaningful against a binary stream.
-        with LOG_PATH.open("rb") as fh:
-            fh.seek(self._log_pos)
-            chunk = fh.read().decode("utf-8", errors="replace")
-            self._log_pos = fh.tell()
+        try:
+            with LOG_PATH.open("rb") as fh:
+                fh.seek(self._log_pos)
+                chunk = fh.read().decode("utf-8", errors="replace")
+                self._log_pos = fh.tell()
+        except OSError:
+            # The engine holds a brief write lock on every append. Leave _log_pos
+            # alone and pick the same bytes up on the next tick.
+            return
 
         hits = sum(1 for line in chunk.splitlines() if "[ACTION]" in line)
         if not hits:
@@ -480,6 +487,8 @@ def main() -> int:
         app.run()
     finally:
         app.stop_engine()
+        if app._puffs:
+            app._puffs.shutdown()
         ctypes.windll.kernel32.ReleaseMutex(handle)
     return 0
 

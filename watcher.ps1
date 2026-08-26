@@ -53,7 +53,13 @@ function Write-Log {
     param([string]$Message, [string]$Level = 'INFO')
     $line = "{0} [{1}] {2}" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss.fff'), $Level, $Message
     Write-Host $line
-    try { Add-Content -Path $LogPath -Value $line -Encoding utf8 } catch { }
+    try {
+        # One generation is plenty; an engine that runs for months must not fill the disk.
+        if ((Test-Path $LogPath) -and ((Get-Item $LogPath).Length -gt 1048576)) {
+            Move-Item -Path $LogPath -Destination "$LogPath.1" -Force
+        }
+        Add-Content -Path $LogPath -Value $line -Encoding utf8
+    } catch { }
 }
 
 $AE      = [System.Windows.Automation.AutomationElement]
@@ -75,7 +81,8 @@ function Invoke-Element {
     return $null
 }
 
-# Approve one dialog host element. Returns $true if a click was issued.
+# Approve one dialog host element.
+# Returns 'approved' | 'failed' | 'observe' | 'nomatch'.
 function Approve-Dialog {
     param($Host_, [string]$Where)
 
@@ -90,13 +97,13 @@ function Approve-Dialog {
 
     Write-Log "dialog found ($Where) buttons: $($labels -join ', ')"
 
-    if ($Observe) { Write-Log "  observe mode - not clicking" 'OBSERVE'; return $false }
-    if (-not $target) { Write-Log "  no button matched /$ApprovePattern/ - left alone" 'WARN'; return $false }
+    if ($Observe) { Write-Log "  observe mode - not clicking" 'OBSERVE'; return 'observe' }
+    if (-not $target) { Write-Log "  no button matched /$ApprovePattern/ - left alone" 'WARN'; return 'nomatch' }
 
     $how = Invoke-Element -Element $target
-    if ($how) { Write-Log "  APPROVED via $how" 'ACTION'; return $true }
+    if ($how) { Write-Log "  APPROVED via $how" 'ACTION'; return 'approved' }
     Write-Log "  FAILED to invoke Allow button" 'ERROR'
-    return $false
+    return 'failed'
 }
 
 # One engine is enough; a second would race the first onto the same dialog.
@@ -147,9 +154,14 @@ while ($true) {
                             if ($last -and ((Get-Date) - $last).TotalSeconds -lt 2) { continue }
                             $lastSeen[$rid] = Get-Date
 
-                            if (Approve-Dialog -Host_ $host_ -Where "hwnd=$($tc.NativeWindowHandle) '$($tc.Name)'") {
+                            $result = Approve-Dialog -Host_ $host_ -Where "hwnd=$($tc.NativeWindowHandle) '$($tc.Name)'"
+                            if ($result -eq 'approved') {
                                 $approved++
                                 Write-Log "  total approved this session: $approved"
+                            } elseif ($result -eq 'failed') {
+                                # Don't sit on a dialog we failed to click; sweep it again
+                                # immediately rather than waiting out the dedupe window.
+                                $lastSeen.Remove($rid)
                             }
                         } catch { }
                     }
