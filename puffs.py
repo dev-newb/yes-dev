@@ -47,6 +47,16 @@ AC_SRC_ALPHA = 0x01
 ULW_ALPHA = 0x02
 DIB_RGB_COLORS = 0
 
+# The shape of a cloud's life. Hoisted out of _Puff so the documentation art can
+# be built from exactly what the app does, and can never quietly drift from it.
+SIZE_RANGE = (26, 46)          # px wide
+ALPHA_RANGE = (0.55, 0.80)     # opacity at birth
+LIFE_RANGE = (2.9, 4.5)        # seconds
+RISE_RANGE = (26.0, 56.0)      # px/sec upward
+DRIFT_RANGE = (-12.0, 12.0)    # px/sec sideways
+SPAWN_X_BACK = (60, 210)       # px in from the right edge of the work area
+SPAWN_Y_UP = (45, 120)         # px up from the bottom of the work area
+
 FRAME_MS = 16          # ~60fps while animating
 IDLE_MS = 120          # cheap heartbeat while waiting for the next approval
 MAX_LIVE = 40          # hard cap, so a runaway loop can't spawn endless windows
@@ -197,16 +207,16 @@ class _Puff:
         # per-second at the ~33fps the loop actually used to run at. Keep them in
         # seconds and px/sec: a faster, shorter-lived cloud is easy to miss over a
         # remote desktop, where only a fraction of frames ever reach the viewer.
-        self.size = random.randint(26, 46)
-        self.alpha0 = random.uniform(0.55, 0.80)
-        self.life = random.uniform(2.9, 4.5)               # seconds
-        self.rise = random.uniform(26.0, 56.0)             # px/sec
-        self.drift = random.uniform(-12.0, 12.0)           # px/sec
+        self.size = random.randint(*SIZE_RANGE)
+        self.alpha0 = random.uniform(*ALPHA_RANGE)
+        self.life = random.uniform(*LIFE_RANGE)            # seconds
+        self.rise = random.uniform(*RISE_RANGE)            # px/sec
+        self.drift = random.uniform(*DRIFT_RANGE)          # px/sec
         self.born = time.perf_counter()
 
         # Anchor near the tray, with enough spread that a burst never stacks.
-        self.x0 = float(area.right - random.randint(60, 210))
-        self.y0 = float(area.bottom - random.randint(45, 120))
+        self.x0 = float(area.right - random.randint(*SPAWN_X_BACK))
+        self.y0 = float(area.bottom - random.randint(*SPAWN_Y_UP))
         self.x, self.y = self.x0, self.y0
         self.alpha = self.alpha0
         self._shown = (int(self.x0), int(self.y0))

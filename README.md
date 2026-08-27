@@ -133,14 +133,19 @@ windows are layered, click-through and non-activating - they never take focus or
 swallow a click. Warnings (burst guard, auto-disarm) still use a real toast,
 because those carry text you need to read.
 
-![The cloud shapes, on transparency](docs/clouds.png)
+![A burst of clouds mid-flight](docs/clouds-preview.png)
 
 Every cloud is generated, never a stored asset: five jittered lobes over a flat
 base, blurred for soft edges, put through a contrast curve so the silhouette
-still reads as a shape, then shaded with a vertical gradient. No two are
-identical. The art above came straight out of the running code -
-`puffs._render_cloud(width, premultiply=False)` returns a straight-alpha PNG
-suitable for documentation, while the app itself uses the premultiplied form.
+still reads as a shape, then shaded with a vertical gradient. No two are alike.
+
+That picture is not a mock-up or a hand-arranged row - `docs/make_art.py` replays
+a real burst and freezes it mid-flight, taking the shapes, spawn positions,
+rise, drift and fade straight from `puffs.py`, so the art cannot drift from the
+app. It is shown on a dark ground because the clouds are built to read over a
+taskbar and would be nearly invisible on a white page; `docs/clouds.png` is the
+same image with a transparent background, and `docs/cloud.png` is a single
+cloud, for reuse elsewhere. Regenerate with `python docs/make_art.py`.
 
 The clouds are drawn as 32-bit bitmaps and handed to the compositor with
 `UpdateLayeredWindow`, not painted by Tk. Colour-keyed transparency can only
