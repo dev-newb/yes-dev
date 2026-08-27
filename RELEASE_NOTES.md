@@ -20,9 +20,11 @@ seconds, unattended.
   when approvals fire dozens of times an hour, so each one instead releases a
   small translucent cloud that drifts up from the tray and fades. Toast and
   silent modes are there if you prefer them.
-- **Burst guard.** Pauses and alerts if approvals spike past 60/min, then
-  re-arms itself after a minute so nothing is ever left waiting on you.
-  Adjustable to 30/120/off.
+- **Burst guard.** Reacts if approvals spike past 60/min (adjustable to
+  30/120/off). By default it asks, with a five-second visible countdown: stop,
+  or allow for one hour. Running the timer out stops it, since that is the safe
+  answer to a burst you did not expect. It can also be set to stop silently and
+  re-arm a minute later.
 - **Auto-disarm timer.** Stay armed for 15 minutes, an hour, four hours, or
   until you turn it off - auto-approval is only a risk while it is on.
 - **Start at login** via a Startup shortcut. No scheduled task, no admin rights.

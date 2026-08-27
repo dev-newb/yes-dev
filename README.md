@@ -39,10 +39,13 @@ On a single-user dev machine that's usually a fine trade. It is still a real
 reduction in protection, so `Yes, Dev` ships with two mitigations on by default:
 
 - **Stay on for** a fixed window (15 min / 1 hour / 4 hours), then it disarms itself.
-- **Burst guard** pauses and alerts you if approvals spike past 60 in a minute,
-  which is well clear of normal load but far below a runaway loop. It re-arms
-  itself after a minute, because a guard that waits for a human recreates the
-  exact problem this tool exists to solve.
+- **Burst guard** reacts if approvals spike past 60 in a minute, which is well
+  clear of normal load but far below a runaway loop. By default it asks what to
+  do, with a visible five-second countdown: **Stop** or **Allow for one hour**.
+  Letting the timer run out stops it, because that is the safe answer to a burst
+  you were not expecting. Set it to **Stop silently** instead and it pauses
+  without asking, re-arming a minute later. Turn the guard off entirely if your
+  workload makes it noise.
 
 The 60/min default is measured, not guessed: several agents working in parallel
 peaked at 15 approvals in the busiest minute of a real session. Set your own
@@ -78,7 +81,7 @@ drops a shortcut in your Startup folder - no scheduled task, no admin rights).
 | **Stay on for** | Auto-disarm after 15 min / 1 hour / 4 hours, or stay on until you say otherwise. |
 | **Speed** | Poll interval: 150ms / 250ms / 750ms. |
 | **Approve notice** | How approvals are announced: floating puffs (default), a toast card, or silent. |
-| **Pause on burst** | Pause and alert past 30 / 60 / 120 approvals a minute, or off. Re-arms itself after a minute. |
+| **Pause on burst** | Trip past 30 / 60 / 120 approvals a minute, or off. Then either **ask me first** (5s dialog: Stop, or Allow for one hour) or **stop silently** and re-arm after a minute. |
 | **Observe only** | Log the dialogs but don't click - useful for a first look. |
 | **Include Microsoft Edge** | Watch Edge windows too. |
 | **Open log / Open config** | `%LOCALAPPDATA%\YesDev\` |
@@ -130,6 +133,12 @@ windows are layered, click-through and non-activating - they never take focus or
 swallow a click. Warnings (burst guard, auto-disarm) still use a real toast,
 because those carry text you need to read.
 
+The clouds are drawn as 32-bit bitmaps and handed to the compositor with
+`UpdateLayeredWindow`, not painted by Tk. Colour-keyed transparency can only
+make one exact colour disappear, which forces hard aliased edges; per-pixel
+alpha gives soft edges and a shaded underside, and one call moves and fades a
+cloud together.
+
 Two Windows quirks cost real time here and are worth knowing if you touch
 `puffs.py`:
 
@@ -141,7 +150,15 @@ Two Windows quirks cost real time here and are worth knowing if you touch
 - **Order matters around `SetWindowLongW`.** Applying the click-through ex-style
   to a window that has not been realized yet drops its layered attributes and it
   stays invisible forever. Call `update_idletasks()` first, then set the style,
-  then re-assert `-alpha` and `-transparentcolor`.
+  then push the bitmap.
+- **Declare argtypes, not just restype, for anything taking a handle.** With only
+  a restype set, ctypes passes a Python int as a C int and a 64-bit `HDC`
+  overflows it - `CreateDIBSection` fails with "argument 1: OverflowError: int
+  too long to convert", the window never gets its pixels, and a plain white
+  rectangle sits there instead of a cloud.
+- **Never let a frame kill the animation loop.** An exception between `after()`
+  calls stops the reschedule, and every cloud on screen freezes there
+  permanently. Catch per-frame, destroy what is live, and keep the loop going.
 
 Set `YESDEV_DEBUG=1` to have the overlay log spawns and failures to
 `%LOCALAPPDATA%\YesDev\puffs.log`.
@@ -153,6 +170,7 @@ Set `YESDEV_DEBUG=1` to have the overlay log spawns and failures to
 | `yes_dev.pyw` | Tray UI, engine supervisor, config |
 | `watcher.ps1` | The UI Automation engine. Runs standalone too. |
 | `puffs.py` | The cloud overlay. Runs as its own process. |
+| `burst_dialog.py` | The five-second burst prompt. Also its own process. |
 | `%LOCALAPPDATA%\YesDev\config.json` | Settings |
 | `%LOCALAPPDATA%\YesDev\yes-dev.log` | Approvals, from the engine |
 | `%LOCALAPPDATA%\YesDev	ray.log` | Tray-side events and errors |

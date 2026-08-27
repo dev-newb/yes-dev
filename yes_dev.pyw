@@ -52,6 +52,8 @@ DEFAULTS = {
     # load for several parallel agents peaks around 15/min, so this leaves real
     # headroom while still catching a runaway loop (which runs orders higher).
     "burst_limit": 60,
+    # What a burst does: "ask" puts up a 5s dialog, "stop" acts without asking.
+    "burst_action": "ask",
     # Minutes to stay armed before disarming automatically; 0 = until turned off.
     "arm_minutes": 0,
 }
@@ -59,6 +61,9 @@ DEFAULTS = {
 BURST_WINDOW = 60.0    # seconds
 BURST_COOLDOWN = 60.0  # auto-resume after this long, rather than stranding agents
 BURST_CHOICES = [("Off", 0), ("30 / min", 30), ("60 / min", 60), ("120 / min", 120)]
+BURST_ACTIONS = [("Ask me first (5s)", "ask"), ("Stop silently", "stop")]
+BURST_DIALOG = BASE / "burst_dialog.py"
+ALLOW_HOUR = 3600.0
 
 POLL_CHOICES = [("Snappy (150ms)", 150), ("Normal (250ms)", 250), ("Relaxed (750ms)", 750)]
 ARM_CHOICES = [("Until I turn it off", 0), ("15 minutes", 15), ("1 hour", 60), ("4 hours", 240)]
@@ -117,6 +122,8 @@ class Config(dict):
             self["burst_limit"] = max(0, int(self["burst_limit"]))
         except (TypeError, ValueError):
             self["burst_limit"] = DEFAULTS["burst_limit"]
+        if self.get("burst_action") not in {"ask", "stop"}:
+            self["burst_action"] = DEFAULTS["burst_action"]
 
     def save(self) -> None:
         try:
@@ -135,6 +142,7 @@ class YesDev:
         self.disarm_at: datetime | None = None
         self.paused_reason: str | None = None
         self.resume_at: datetime | None = None
+        self.allow_until: datetime | None = None   # burst guard snoozed by the user
         self.icon: pystray.Icon | None = None
         self._log_pos = 0
         self._lock = threading.Lock()
@@ -248,14 +256,44 @@ class YesDev:
                      # which would keep pushing the auto-resume further out
 
         limit = self.cfg["burst_limit"]
-        if limit and len(self.recent) >= limit:
-            self._pause("burst guard", resume_after=BURST_COOLDOWN)
-            self.notify(
-                f"Paused: {len(self.recent)} approvals in under a minute. "
-                f"Resuming automatically in {int(BURST_COOLDOWN)}s."
-            )
+        snoozed = self.allow_until is not None and datetime.now() < self.allow_until
+        if limit and not snoozed and len(self.recent) >= limit:
+            self._on_burst(len(self.recent))
         else:
             self.announce(hits)
+
+    def _on_burst(self, count: int) -> None:
+        """A burst tripped the guard. Either act silently, or put the choice to
+        the user with a short deadline - deciding nothing means stop."""
+        if self.cfg["burst_action"] != "ask":
+            self._pause("burst guard", resume_after=BURST_COOLDOWN)
+            self.notify(f"Paused: {count} approvals in under a minute. "
+                        f"Resuming automatically in {int(BURST_COOLDOWN)}s.")
+            return
+
+        log(f"burst of {count} - asking the user")
+        choice = "stop"
+        try:
+            pyw = Path(sys.executable)
+            exe = pyw.with_name("pythonw.exe") if pyw.with_name("pythonw.exe").exists() else pyw
+            done = subprocess.run(
+                [str(exe), str(BURST_DIALOG), str(count), APP_NAME],
+                capture_output=True, text=True, timeout=30,
+                creationflags=CREATE_NO_WINDOW)
+            choice = (done.stdout or "").strip().splitlines()[-1:] or ["stop"]
+            choice = choice[0]
+        except Exception as exc:
+            log(f"  burst dialog failed ({exc!r}) - stopping, the safe answer")
+
+        if choice == "allow_hour":
+            self.allow_until = datetime.now() + timedelta(seconds=ALLOW_HOUR)
+            self.recent.clear()
+            log("  user allowed bursts for one hour")
+            self.notify(f"{APP_NAME} will keep approving for one hour")
+        else:
+            log("  user stopped the app (or let the timer run out)")
+            self._pause("stopped after burst")   # no auto-resume: this was deliberate
+            self.notify(f"{APP_NAME} stopped. Turn it back on from the tray when ready.")
 
         self.refresh()
 
@@ -344,6 +382,7 @@ class YesDev:
             self.cfg["enabled"] = not self.cfg["enabled"]
             self.paused_reason = None
             self.resume_at = None
+            self.allow_until = None
             self.recent.clear()
             self.cfg.save()
             self.start_engine() if self.cfg["enabled"] else self.stop_engine()
@@ -448,11 +487,16 @@ class YesDev:
                   checked=lambda _, v=val: self.cfg["notify_style"] == v, radio=True)
                 for label, val in NOTIFY_CHOICES
             ])),
-            I("Pause on burst", M(*[
-                I(label, lambda _, v=val: self.set_value("burst_limit", v)(),
-                  checked=lambda _, v=val: self.cfg["burst_limit"] == v, radio=True)
-                for label, val in BURST_CHOICES
-            ])),
+            I("Pause on burst", M(
+                *[I(label, lambda _, v=val: self.set_value("burst_limit", v)(),
+                    checked=lambda _, v=val: self.cfg["burst_limit"] == v, radio=True)
+                  for label, val in BURST_CHOICES],
+                M.SEPARATOR,
+                *[I(label, lambda _, v=val: self.set_value("burst_action", v)(),
+                    checked=lambda _, v=val: self.cfg["burst_action"] == v,
+                    radio=True, enabled=lambda _: bool(self.cfg["burst_limit"]))
+                  for label, val in BURST_ACTIONS],
+            )),
             I("Options", M(
                 I("Observe only (log, don't click)",
                   lambda _: self.toggle("observe_only", restart=True)(),

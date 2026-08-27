@@ -24,6 +24,8 @@ import sys
 import threading
 import time
 import tkinter as tk
+
+from PIL import Image, ImageChops, ImageDraw, ImageFilter
 from pathlib import Path
 
 GWL_EXSTYLE = -20
@@ -34,11 +36,16 @@ WS_EX_TOOLWINDOW = 0x00000080
 SPI_GETWORKAREA = 0x0030
 CREATE_NO_WINDOW = 0x08000000
 
-# Any colour that won't show up in the artwork; these pixels become fully
-# transparent AND click-through.
-COLOR_KEY = "#010203"
-CLOUD_FILL = "#dcebff"
-CLOUD_EDGE = "#7aa7e0"   # keeps the shape readable on light backgrounds too
+# Colour-keying can only make one exact colour transparent, which forces hard
+# aliased edges. These clouds are drawn into a 32-bit bitmap and pushed with
+# UpdateLayeredWindow instead, so every pixel carries its own alpha and the
+# edges can be soft. Tk only supplies the window; it never paints it.
+CLOUD_TOP = (247, 250, 255)      # lit top
+CLOUD_BOTTOM = (176, 193, 214)   # shaded underside
+AC_SRC_OVER = 0x00
+AC_SRC_ALPHA = 0x01
+ULW_ALPHA = 0x02
+DIB_RGB_COLORS = 0
 
 FRAME_MS = 16          # ~60fps while animating
 IDLE_MS = 120          # cheap heartbeat while waiting for the next approval
@@ -74,6 +81,103 @@ def _make_click_through(win: tk.Toplevel) -> None:
         pass
 
 
+class _BlendFunction(ctypes.Structure):
+    _fields_ = [("BlendOp", ctypes.c_byte), ("BlendFlags", ctypes.c_byte),
+                ("SourceConstantAlpha", ctypes.c_byte), ("AlphaFormat", ctypes.c_byte)]
+
+
+class _Point(ctypes.Structure):
+    _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
+
+
+class _Size(ctypes.Structure):
+    _fields_ = [("cx", ctypes.c_long), ("cy", ctypes.c_long)]
+
+
+class _BitmapInfoHeader(ctypes.Structure):
+    _fields_ = [("biSize", ctypes.c_uint32), ("biWidth", ctypes.c_long),
+                ("biHeight", ctypes.c_long), ("biPlanes", ctypes.c_uint16),
+                ("biBitCount", ctypes.c_uint16), ("biCompression", ctypes.c_uint32),
+                ("biSizeImage", ctypes.c_uint32), ("biXPelsPerMeter", ctypes.c_long),
+                ("biYPelsPerMeter", ctypes.c_long), ("biClrUsed", ctypes.c_uint32),
+                ("biClrImportant", ctypes.c_uint32)]
+
+
+class _BitmapInfo(ctypes.Structure):
+    _fields_ = [("bmiHeader", _BitmapInfoHeader), ("bmiColors", ctypes.c_uint32 * 3)]
+
+
+def _bind_gdi():
+    """Handles are pointer-sized; the default c_int restype truncates them on 64-bit."""
+    u, g = ctypes.windll.user32, ctypes.windll.gdi32
+    for fn in (u.GetDC, u.GetParent):
+        fn.restype = ctypes.c_void_p
+    for fn in (g.CreateCompatibleDC, g.CreateDIBSection, g.SelectObject):
+        fn.restype = ctypes.c_void_p
+    g.CreateCompatibleDC.argtypes = [ctypes.c_void_p]
+    g.SelectObject.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+    # Without argtypes ctypes passes a Python int as a C int, and a 64-bit HDC
+    # overflows it: "argument 1: OverflowError: int too long to convert".
+    g.CreateDIBSection.argtypes = [
+        ctypes.c_void_p, ctypes.c_void_p, ctypes.c_uint32,
+        ctypes.POINTER(ctypes.c_void_p), ctypes.c_void_p, ctypes.c_uint32]
+    g.DeleteObject.argtypes = [ctypes.c_void_p]
+    g.DeleteDC.argtypes = [ctypes.c_void_p]
+    u.ReleaseDC.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+    u.UpdateLayeredWindow.argtypes = [
+        ctypes.c_void_p, ctypes.c_void_p, ctypes.POINTER(_Point), ctypes.POINTER(_Size),
+        ctypes.c_void_p, ctypes.POINTER(_Point), ctypes.c_uint32,
+        ctypes.POINTER(_BlendFunction), ctypes.c_uint32]
+    return u, g
+
+
+_USER32, _GDI32 = _bind_gdi()
+
+
+def _render_cloud(width: int) -> "Image.Image":
+    """A soft, shaded little cloud as premultiplied BGRA.
+
+    Lobes are jittered per cloud so no two are identical, blurred for soft edges,
+    then put through a contrast curve so the silhouette still reads as a shape
+    rather than a smudge. A vertical gradient does the shading: lit on top,
+    cooler underneath.
+    """
+    w = max(24, int(width))
+    h = int(w * 0.78)
+    ss = 3                                   # supersample, then downscale to anti-alias
+    W, H = w * ss, h * ss
+
+    mask = Image.new("L", (W, H), 0)
+    d = ImageDraw.Draw(mask)
+    # Circles in pixel space, kept inside ~15% margins so the blur has room and
+    # nothing gets cut off flat against the edge of the bitmap.
+    lobes = [(0.28, 0.60, 0.20), (0.50, 0.52, 0.26), (0.72, 0.60, 0.19),
+             (0.40, 0.43, 0.17), (0.62, 0.46, 0.15)]
+    for cx, cy, r in lobes:
+        cx += random.uniform(-0.025, 0.025)
+        cy += random.uniform(-0.025, 0.025)
+        rr = r * random.uniform(0.9, 1.1) * W
+        d.ellipse([cx * W - rr, cy * H - rr, cx * W + rr, cy * H + rr], fill=255)
+    # A flat base keeps it from looking like a bunch of loose bubbles.
+    d.rectangle([0.24 * W, 0.58 * H, 0.78 * W, 0.84 * H], fill=255)
+
+    mask = mask.filter(ImageFilter.GaussianBlur(radius=W * 0.030))
+    mask = mask.point(lambda v: 0 if v < 55 else min(255, int((v - 55) * 2.0)))
+    mask = mask.resize((w, h), Image.LANCZOS)
+
+    grad = Image.new("RGB", (1, h))
+    for y in range(h):
+        f = y / max(1, h - 1)
+        grad.putpixel((0, y), tuple(
+            int(CLOUD_TOP[i] + (CLOUD_BOTTOM[i] - CLOUD_TOP[i]) * f) for i in range(3)))
+    rgb = grad.resize((w, h))
+
+    r, g, b = rgb.split()
+    # UpdateLayeredWindow wants premultiplied alpha; ImageChops.multiply is exactly that.
+    r, g, b = (ImageChops.multiply(c, mask) for c in (r, g, b))
+    return Image.merge("RGBA", (r, g, b, mask))
+
+
 class _Puff:
     """One cloud: rises, drifts sideways a little, fades out, then destroys itself.
 
@@ -102,37 +206,44 @@ class _Puff:
         self._shown = (int(self.x0), int(self.y0))
         self._alpha_set = self.alpha0
 
+        art = _render_cloud(self.size)
+        self.w, self.h = art.size
+        self._screen_dc = self._mem_dc = self._bitmap = self._old_bitmap = None
+
         self.win = tk.Toplevel(root)
         self.win.overrideredirect(True)
         self.win.attributes("-topmost", True)
-        self.win.attributes("-alpha", self.alpha)
-        self.win.configure(bg=COLOR_KEY)
-        try:
-            self.win.attributes("-transparentcolor", COLOR_KEY)
-        except tk.TclError:
-            pass   # very old Tk: the cloud still shows, just on a solid square
-
-        s = self.size
-        canvas = tk.Canvas(self.win, width=s, height=s, bg=COLOR_KEY,
-                           highlightthickness=0, bd=0)
-        canvas.pack()
-        # Three overlapping blobs read as a cloud at this size.
-        for box in ((0.02, 0.42, 0.52, 0.92), (0.46, 0.40, 0.98, 0.90),
-                    (0.24, 0.16, 0.80, 0.74)):
-            canvas.create_oval(s * box[0], s * box[1], s * box[2], s * box[3],
-                               fill=CLOUD_FILL, outline=CLOUD_EDGE, width=1)
-
-        self.win.geometry(f"{s}x{s}+{int(self.x0)}+{int(self.y0)}")
-        # Realize and paint BEFORE touching the ex-style. Changing ex-style on a
-        # not-yet-realized layered window drops its layered attributes and the
-        # window stays invisible forever, so re-assert them afterwards too.
+        self.win.geometry(f"{self.w}x{self.h}+{int(self.x0)}+{int(self.y0)}")
+        # Realize before touching the ex-style: changing it on a window that has
+        # not been created yet drops the layered flag and it never appears.
         self.win.update_idletasks()
         _make_click_through(self.win)
-        self.win.attributes("-alpha", self.alpha)
+
         try:
-            self.win.attributes("-transparentcolor", COLOR_KEY)
-        except tk.TclError:
-            pass
+            self._attach_bitmap(art)
+        except Exception:
+            # Never leave a bare Tk window mapped: it shows as a white rectangle
+            # and, with nothing animating it, sits there until the process dies.
+            self.destroy()
+            raise
+
+    def _attach_bitmap(self, art) -> None:
+        # Hand the pixels straight to the compositor. Tk never draws this window.
+        self._screen_dc = _USER32.GetDC(None)
+        self._mem_dc = _GDI32.CreateCompatibleDC(self._screen_dc)
+        bi = _BitmapInfo()
+        bi.bmiHeader.biSize = ctypes.sizeof(_BitmapInfoHeader)
+        bi.bmiHeader.biWidth = self.w
+        bi.bmiHeader.biHeight = -self.h          # negative = top-down
+        bi.bmiHeader.biPlanes = 1
+        bi.bmiHeader.biBitCount = 32
+        bits = ctypes.c_void_p()
+        self._bitmap = _GDI32.CreateDIBSection(
+            self._mem_dc, ctypes.byref(bi), DIB_RGB_COLORS, ctypes.byref(bits), None, 0)
+        raw = art.tobytes("raw", "BGRA")
+        ctypes.memmove(bits, raw, len(raw))
+        self._old_bitmap = _GDI32.SelectObject(self._mem_dc, self._bitmap)
+        self._push(self.x0, self.y0, self.alpha0)
 
     def step(self, now: float) -> bool:
         """Advance to wall-clock `now`. Returns False once the puff is gone."""
@@ -146,24 +257,44 @@ class _Puff:
         self.x = self.x0 + self.drift * t
         self.y = self.y0 - self.rise * t
 
-        try:
-            # Both of these are Win32 round trips; skip the ones that would be no-ops.
-            pos = (int(self.x), int(self.y))
-            if pos != self._shown:
-                self.win.geometry(f"+{pos[0]}+{pos[1]}")
-                self._shown = pos
-            if abs(self.alpha - self._alpha_set) >= 0.008:
-                self.win.attributes("-alpha", self.alpha)
-                self._alpha_set = self.alpha
-        except tk.TclError:
-            return False
+        # One call moves and fades together, so a frame costs a single round trip.
+        pos = (int(self.x), int(self.y))
+        if pos != self._shown or abs(self.alpha - self._alpha_set) >= 0.004:
+            if not self._push(self.x, self.y, self.alpha):
+                return False
         return True
 
-    def destroy(self) -> None:
+    def _push(self, x: float, y: float, alpha: float) -> bool:
+        blend = _BlendFunction(AC_SRC_OVER, 0, max(0, min(255, int(alpha * 255))),
+                               AC_SRC_ALPHA)
+        dst = _Point(int(x), int(y))
+        src = _Point(0, 0)
+        size = _Size(self.w, self.h)
         try:
-            self.win.destroy()
-        except tk.TclError:
-            pass
+            hwnd = _USER32.GetParent(self.win.winfo_id()) or self.win.winfo_id()
+            ok = _USER32.UpdateLayeredWindow(
+                hwnd, self._screen_dc, ctypes.byref(dst), ctypes.byref(size),
+                self._mem_dc, ctypes.byref(src), 0, ctypes.byref(blend), ULW_ALPHA)
+        except (tk.TclError, OSError):
+            return False
+        self._shown = (int(x), int(y))
+        self._alpha_set = alpha
+        return bool(ok)
+
+    def destroy(self) -> None:
+        # GDI objects are not garbage collected; leaking one per cloud would bleed
+        # handles for as long as the overlay process lives.
+        for release in (
+            lambda: self._old_bitmap and _GDI32.SelectObject(self._mem_dc, self._old_bitmap),
+            lambda: self._bitmap and _GDI32.DeleteObject(self._bitmap),
+            lambda: self._mem_dc and _GDI32.DeleteDC(self._mem_dc),
+            lambda: self._screen_dc and _USER32.ReleaseDC(None, self._screen_dc),
+            self.win.destroy,
+        ):
+            try:
+                release()
+            except Exception:
+                pass
 
 
 def _debug(message: str) -> None:
@@ -267,7 +398,16 @@ def serve() -> None:
             pass
 
         n = len(live)
-        live[:] = [p for p in live if p.step(t0)]
+        try:
+            live[:] = [p for p in live if p.step(t0)]
+        except Exception:
+            # A frame that throws must not kill the after() chain - that freezes
+            # every live cloud on screen permanently.
+            import traceback
+            _debug(f"frame failed: {traceback.format_exc()}")
+            for stuck in live:
+                stuck.destroy()
+            live.clear()
         work_ms = (time.perf_counter() - t0) * 1000
         if n:
             timing["work"].append(work_ms)
