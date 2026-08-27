@@ -133,6 +133,15 @@ windows are layered, click-through and non-activating - they never take focus or
 swallow a click. Warnings (burst guard, auto-disarm) still use a real toast,
 because those carry text you need to read.
 
+![The cloud shapes, on transparency](docs/clouds.png)
+
+Every cloud is generated, never a stored asset: five jittered lobes over a flat
+base, blurred for soft edges, put through a contrast curve so the silhouette
+still reads as a shape, then shaded with a vertical gradient. No two are
+identical. The art above came straight out of the running code -
+`puffs._render_cloud(width, premultiply=False)` returns a straight-alpha PNG
+suitable for documentation, while the app itself uses the premultiplied form.
+
 The clouds are drawn as 32-bit bitmaps and handed to the compositor with
 `UpdateLayeredWindow`, not painted by Tk. Colour-keyed transparency can only
 make one exact colour disappear, which forces hard aliased edges; per-pixel
@@ -174,6 +183,7 @@ Set `YESDEV_DEBUG=1` to have the overlay log spawns and failures to
 | `%LOCALAPPDATA%\YesDev\config.json` | Settings |
 | `%LOCALAPPDATA%\YesDev\yes-dev.log` | Approvals, from the engine |
 | `%LOCALAPPDATA%\YesDev	ray.log` | Tray-side events and errors |
+| `docs/cloud.png`, `docs/clouds.png` | Cloud art on transparency, regenerable from `puffs.py` |
 
 Both logs roll over at 1MB, keeping one previous generation.
 

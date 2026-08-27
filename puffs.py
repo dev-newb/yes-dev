@@ -134,8 +134,12 @@ def _bind_gdi():
 _USER32, _GDI32 = _bind_gdi()
 
 
-def _render_cloud(width: int) -> "Image.Image":
-    """A soft, shaded little cloud as premultiplied BGRA.
+def _render_cloud(width: int, premultiply: bool = True) -> "Image.Image":
+    """A soft, shaded little cloud.
+
+    Premultiplied by default because that is what UpdateLayeredWindow wants.
+    Pass premultiply=False for a normal straight-alpha PNG, which is what image
+    viewers and browsers expect - handy for documentation art.
 
     Lobes are jittered per cloud so no two are identical, blurred for soft edges,
     then put through a contrast curve so the silhouette still reads as a shape
@@ -173,8 +177,10 @@ def _render_cloud(width: int) -> "Image.Image":
     rgb = grad.resize((w, h))
 
     r, g, b = rgb.split()
-    # UpdateLayeredWindow wants premultiplied alpha; ImageChops.multiply is exactly that.
-    r, g, b = (ImageChops.multiply(c, mask) for c in (r, g, b))
+    if premultiply:
+        # UpdateLayeredWindow wants premultiplied alpha; ImageChops.multiply is
+        # exactly that. Straight alpha would show as a bright halo.
+        r, g, b = (ImageChops.multiply(c, mask) for c in (r, g, b))
     return Image.merge("RGBA", (r, g, b, mask))
 
 
