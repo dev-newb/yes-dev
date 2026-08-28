@@ -24,6 +24,7 @@ Runs standalone for exactly that shake-out:
 from __future__ import annotations
 
 import argparse
+import os
 import re
 import sys
 import time
@@ -140,12 +141,15 @@ def _is_visible(element) -> bool:
 
 class Engine:
     def __init__(self, observe: bool = False, poll_ms: int = POLL_MS_DEFAULT,
-                 include_edge: bool = False, log_path: Path = LOG_PATH) -> None:
+                 include_edge: bool = False, log_path: Path = LOG_PATH,
+                 exit_with_parent: bool = False) -> None:
         self.observe = observe
         self.poll_s = max(0.05, poll_ms / 1000.0)
         self.bundles = CHROME_BUNDLES + (EDGE_BUNDLES if include_edge else ())
         self.log_path = Path(log_path)
         self.approved = 0
+        self.exit_with_parent = exit_with_parent
+        self._parent_pid = os.getppid()
         self._seen: dict[str, float] = {}    # dedupe key -> last-press wall clock
 
     # -------- logging: byte-for-byte the format the tray parses --------
@@ -323,8 +327,18 @@ class Engine:
             # Keep running: the grant can be given while we are up, and the next
             # sweep will start seeing elements. Better than exiting and looking dead.
         self.log(f"engine started (observe={self.observe}, interval={int(self.poll_s * 1000)}ms, "
-                 f"bundles={len(self.bundles)}, pid={__import__('os').getpid()})")
+                 f"bundles={len(self.bundles)}, pid={os.getpid()})")
         while True:
+            if self.exit_with_parent and os.getppid() != self._parent_pid:
+                # The tray is gone (quit, crashed, killed, logged out) and we have
+                # been reparented. Exiting matters more here than it looks: every
+                # safety limit - the burst guard, the arm timer, the pause - lives
+                # in the tray. An engine that outlives it keeps approving prompts
+                # with nothing watching the rate and no way to turn it off short
+                # of finding the pid.
+                self.log("parent process is gone - exiting rather than approving "
+                         "unsupervised", "WARN")
+                return 0
             try:
                 self.sweep()
             except Exception as exc:
@@ -339,10 +353,15 @@ def main(argv=None) -> int:
     ap.add_argument("--interval-ms", type=int, default=POLL_MS_DEFAULT)
     ap.add_argument("--include-edge", action="store_true")
     ap.add_argument("--log-path", default=str(LOG_PATH))
+    ap.add_argument("--exit-with-parent", action="store_true",
+                    help="stop as soon as the launching process goes away; the "
+                         "tray passes this so a dead tray cannot leave an engine "
+                         "approving prompts unsupervised")
     args = ap.parse_args(argv)
 
     engine = Engine(observe=args.observe, poll_ms=args.interval_ms,
-                    include_edge=args.include_edge, log_path=Path(args.log_path))
+                    include_edge=args.include_edge, log_path=Path(args.log_path),
+                    exit_with_parent=args.exit_with_parent)
     if args.once:
         if not is_trusted():
             engine.log("NOT trusted for Accessibility - results will be empty.", "ERROR")

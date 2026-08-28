@@ -104,6 +104,26 @@ live through the Accessibility API (reading its own menu) rather than by eye.
   Center refuses notifications from an unbundled script; it will work once the
   app is packaged and signed. Puffs (the default) are unaffected.
 
+### Orphaned engines — found in use, fixed
+
+A tray killed rather than asked (SIGTERM from a terminal going away, logout, a
+crash) took its `finally` with it and left `watcher_mac.py` running with
+**PPID 1**. This is worse than an ordinary stray process: every safety limit —
+the burst guard, the arm timer, pause/resume — lives in the *tray*. An engine
+that outlives it keeps approving Chrome prompts with no rate guard, no timer and
+no way to stop it short of finding the pid. Two fixes, belt and braces:
+
+- **`watcher_mac.py --exit-with-parent`** (the tray always passes it): the engine
+  records its parent pid at startup and exits as soon as it is reparented.
+  Verified — SIGKILL the parent, engine is gone in ~0.5 s with a `[WARN]` line
+  saying why. Works even where no cleanup is possible, which is the point.
+- **SIGTERM/SIGINT/SIGHUP handlers in the tray**, so the common case shuts down
+  tidily and immediately. Verified: signal logged, tray and engine both gone in
+  ~0.5 s. The handler runs when the interpreter next executes Python, which the
+  1 s `rumps.Timer` guarantees.
+
+Running `watcher_mac.py` by hand is unaffected — the flag is opt-in.
+
 To run it: `python3 yes_dev_mac.py` (use the venv that has pyobjc/rumps/pillow).
 
 Next up: packaging — the signed `.app` so the Accessibility grant attaches to

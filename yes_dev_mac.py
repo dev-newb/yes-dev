@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import json
 import random
+import signal
 import subprocess
 import sys
 import time
@@ -231,7 +232,12 @@ class YesDev(rumps.App):
             return
         args = [sys.executable, str(WATCHER),
                 "--interval-ms", str(self.cfg["poll_ms"]),
-                "--log-path", str(LOG_PATH)]
+                "--log-path", str(LOG_PATH),
+                # If this tray dies without cleaning up, the engine stops itself.
+                # Every safety limit lives here, not in the engine, so an engine
+                # that outlives the tray approves prompts with no burst guard and
+                # no arm timer behind it.
+                "--exit-with-parent"]
         if self.cfg["observe_only"]:
             args.append("--observe")
         if self.cfg["include_edge"]:
@@ -634,6 +640,23 @@ def main() -> int:
         log("Accessibility NOT granted - the engine cannot click until it is. "
             "Use the menu's Accessibility item, or System Settings > Privacy & "
             "Security > Accessibility.")
+
+    # Quit from the menu cleans up through on_quit, but a tray that is killed
+    # rather than asked (logout, a stray kill, the terminal that launched it going
+    # away) would otherwise take its `finally` with it and orphan the engine.
+    # The engine's own --exit-with-parent is the real backstop; this makes the
+    # common case tidy and immediate. The handler only runs when the interpreter
+    # next executes Python, which the 1s timer below guarantees.
+    def _on_signal(signum, _frame):
+        log(f"signal {signum} - shutting down")
+        app.shutdown()
+        rumps.quit_application()
+
+    for _sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
+        try:
+            signal.signal(_sig, _on_signal)
+        except (ValueError, OSError):
+            pass
 
     rumps.Timer(app._tick, 1).start()
     try:
