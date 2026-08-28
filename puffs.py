@@ -23,7 +23,11 @@ import subprocess
 import sys
 import threading
 import time
-import tkinter as tk
+
+try:
+    import tkinter as tk
+except ImportError:      # the Windows overlay needs Tk; _render_cloud does not.
+    tk = None            # Lets puffs_mac.py import the artwork on a Tk-less Mac.
 
 from PIL import Image, ImageChops, ImageDraw, ImageFilter
 from pathlib import Path
@@ -141,7 +145,12 @@ def _bind_gdi():
     return u, g
 
 
-_USER32, _GDI32 = _bind_gdi()
+if sys.platform == "win32":
+    _USER32, _GDI32 = _bind_gdi()
+else:
+    # Artwork-only import (puffs_mac.py reads _render_cloud and the motion
+    # ranges from here). The Windows compositor is never touched off-platform.
+    _USER32 = _GDI32 = None
 
 
 def _render_cloud(width: int, premultiply: bool = True) -> "Image.Image":
@@ -456,12 +465,18 @@ def serve() -> None:
 
 
 class PuffClient:
-    """Parent-side handle. Spawns the overlay process on demand and feeds it."""
+    """Parent-side handle. Spawns the overlay process on demand and feeds it.
 
-    def __init__(self, log=None) -> None:
+    `script` is the overlay to run with --serve; it defaults to this file (the
+    Windows overlay). The macOS tray passes puffs_mac.py - same protocol,
+    different window system.
+    """
+
+    def __init__(self, log=None, script: "Path | str | None" = None) -> None:
         self._proc: subprocess.Popen | None = None
         self._lock = threading.Lock()
         self._log = log or (lambda _m: None)
+        self._script = str(script) if script else os.path.abspath(__file__)
 
     def _interpreter(self) -> str:
         exe = Path(sys.executable)
@@ -473,9 +488,10 @@ class PuffClient:
 
     def _spawn(self) -> bool:
         try:
+            kwargs = {"creationflags": CREATE_NO_WINDOW} if sys.platform == "win32" else {}
             self._proc = subprocess.Popen(
-                [self._interpreter(), os.path.abspath(__file__), "--serve"],
-                stdin=subprocess.PIPE, creationflags=CREATE_NO_WINDOW,
+                [self._interpreter(), self._script, "--serve"],
+                stdin=subprocess.PIPE, **kwargs,
             )
             self._log(f"  puff overlay process started pid={self._proc.pid}")
             return True
