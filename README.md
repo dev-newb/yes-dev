@@ -21,12 +21,16 @@ after a reboot.
 
 ## Why not just turn the prompt off?
 
-You can't. There's no flag, no policy, no "remember my choice". The
-`RemoteDebuggingAllowed` enterprise policy only enables or disables the feature
-outright, and the upstream requests to persist approval
-([#825](https://github.com/ChromeDevTools/chrome-devtools-mcp/issues/825),
-[#1794](https://github.com/ChromeDevTools/chrome-devtools-mcp/issues/1794)) are
-still open. Clicking it is the only route.
+You can't, and this is not a gap waiting to be filled. There's no flag, no
+policy, no "remember my choice". The `RemoteDebuggingAllowed` enterprise policy
+only enables or disables the feature outright.
+
+The request to persist approval,
+[#825](https://github.com/ChromeDevTools/chrome-devtools-mcp/issues/825), was
+**closed as not planned** in March 2026 - so a built-in "always allow" is not
+coming. [#1794](https://github.com/ChromeDevTools/chrome-devtools-mcp/issues/1794),
+about the prompts stacking up when several clients connect at once, is still
+open. Clicking the button is the only route, which is what this does.
 
 ## Read this before you install it
 

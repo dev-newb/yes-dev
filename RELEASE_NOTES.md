@@ -5,9 +5,9 @@ First release.
 Chrome 144+ asks for consent every time a client attaches to its remote
 debugging endpoint. Drive Chrome with several agents and those prompts stack up,
 each one blocking its client until a human clicks Allow. There is no flag or
-policy to turn this off - the upstream requests to persist approval are still
-open - so the only route is to click it. `Yes, Dev` sits in the tray and clicks
-it for you.
+policy to turn this off, and the request to persist approval was closed as not
+planned, so the only route is to click it. `Yes, Dev` sits in the tray and
+clicks it for you.
 
 Four parallel attaches go from ~35 seconds of waiting on a human to 2.4-4.4
 seconds, unattended.
