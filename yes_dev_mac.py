@@ -83,16 +83,20 @@ POLL_CHOICES = [("Snappy (150ms)", 150), ("Normal (250ms)", 250), ("Relaxed (750
 ARM_CHOICES = [("Until I turn it off", 0), ("15 minutes", 15), ("1 hour", 60), ("4 hours", 240)]
 NOTIFY_CHOICES = [("Floating puffs", "puffs"), ("Toast card", "toast"), ("Silent", "none")]
 
-# rumps renders the status item image at 20x20 points; drawing at 2x keeps it
-# crisp on retina, the same trick puffs_mac.py uses for the clouds.
-ICON_PT = 20
-ICON_PX = ICON_PT * 2
-ICON_SS = 6          # draw this much larger, then downscale, for clean edges
+# rumps forces every status icon into a 20x20 point square. A cloud is much wider
+# than it is tall, so squaring it wastes the top and bottom of the box and the
+# icon reads small next to neighbouring menu extras. We size it ourselves instead:
+# the art is cropped to what it actually covers and given its own aspect ratio, so
+# the height is the thing that fills the bar. 18pt is about as tall as an icon
+# should be in a 24pt menu bar.
+ICON_H_PT = 18
+ICON_SCALE = 2       # draw at 2x and size in points: crisp on retina
+ICON_SS = 6          # draw this much larger again, then downscale, for clean edges
 ICON_SEED = 7        # one silhouette for every state: the icon must not change
                      # shape when it changes colour, only its colour
-CHECK_SCALE = 1.34   # the check is oversized on purpose; at 20pt a thin one
+CHECK_SCALE = 1.34   # the check is oversized on purpose; this small, a thin one
                      # turns to mush
-ICON_VERSION = 2     # bump when the drawing changes, so cached files are dropped
+ICON_VERSION = 3     # bump when the drawing changes, so cached files are dropped
 
 STATE_COLORS = {
     "paused": (218, 54, 51),      # red
@@ -134,7 +138,7 @@ def icon_path(state: str) -> str:
     if path.exists():
         return str(path)
 
-    R = ICON_PX * ICON_SS
+    R = ICON_H_PT * ICON_SCALE * ICON_SS
     canvas = Image.new("RGBA", (R, R), (0, 0, 0, 0))
 
     # Seeded, so all four states share one silhouette - _render_cloud jitters its
@@ -155,8 +159,20 @@ def icon_path(state: str) -> str:
             (cx + 13.5 * s, cy - 10 * s)],
            fill=(255, 255, 255, 255), width=int(5.6 * s), joint="curve")
 
-    canvas.resize((ICON_PX, ICON_PX), Image.LANCZOS).save(path)
+    # Crop to what the art actually covers. _render_cloud leaves ~15% margins so
+    # its blur has room, and those margins would otherwise be paid for in icon
+    # size - the cloud would sit small inside a box of nothing.
+    canvas = canvas.crop(canvas.getbbox())
+    h_px = ICON_H_PT * ICON_SCALE
+    w_px = max(1, round(canvas.width * h_px / canvas.height))
+    canvas.resize((w_px, h_px), Image.LANCZOS).save(path)
     return str(path)
+
+
+def icon_point_size(path: str) -> tuple[float, float]:
+    """The icon's size in points, from the pixels actually on disk."""
+    with Image.open(path) as img:
+        return (img.width / ICON_SCALE, img.height / ICON_SCALE)
 
 
 class Config(dict):
@@ -513,11 +529,34 @@ class YesDev(rumps.App):
             rumps.MenuItem("Quit", callback=self.on_quit),
         ]
 
+    def _size_icon(self, path: str) -> None:
+        """Give the status image its real aspect ratio.
+
+        rumps' icon setter hardcodes setSize_((20, 20)), which squares a cloud
+        that is not square and leaves it small in the bar. There is no supported
+        way to pass a size through App.icon, so the NSImage it just built is
+        resized in place and the status item asked to pick it up again - the same
+        two calls rumps' own setter makes, in the same order.
+        """
+        image = getattr(self, "_icon_nsimage", None)
+        if image is None:
+            return
+        try:
+            image.setSize_(icon_point_size(path))
+            nsapp = getattr(self, "_nsapp", None)
+            if nsapp is not None:
+                nsapp.setStatusBarIcon()
+        except Exception:
+            # Cosmetic only: if a future rumps renames either of these, the icon
+            # is merely back to being square rather than the app being broken.
+            log("could not resize the status icon - falling back to rumps' square")
+
     def refresh(self) -> None:
         try:
             state = self.state()
             if state != self._icon_state:
                 self.icon = icon_path(state)
+                self._size_icon(icon_path(state))
                 self._icon_state = state
 
             bits = [f"Status: {self.state_text()}"]
