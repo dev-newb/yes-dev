@@ -41,7 +41,10 @@ try:
         AXUIElementCreateApplication,
         AXUIElementCopyAttributeValue,
         AXUIElementPerformAction,
+        AXValueGetValue,
         kAXErrorSuccess,
+        kAXValueCGPointType,
+        kAXValueCGSizeType,
     )
     from AppKit import NSWorkspace
 except ImportError:
@@ -90,21 +93,48 @@ def _children(element):
     return out
 
 
+def _ax_point(element, name="AXPosition"):
+    """Unpack a CGPoint-typed AX attribute to (x, y). A pyobjc AXValue does not
+    expose .pointValue(); it must go through AXValueGetValue, which is why the
+    first cut of the dedupe key silently fell back to object identity."""
+    val = _attr(element, name)
+    if val is None:
+        return None
+    ok, pt = AXValueGetValue(val, kAXValueCGPointType, None)
+    return (pt.x, pt.y) if ok else None
+
+
+def _ax_size(element, name="AXSize"):
+    val = _attr(element, name)
+    if val is None:
+        return None
+    ok, sz = AXValueGetValue(val, kAXValueCGSizeType, None)
+    return (sz.width, sz.height) if ok else None
+
+
+# The consent prompt shows up in the tree three ways: the AXSheet on the browser
+# window, the AXGroup/AXApplicationAlertDialog it wraps, and - a false positive -
+# the Window menu's AXMenuItem bearing the same title (plus the AXHeading inside).
+# Only the first two are real dialog containers with the Allow button beneath them.
+_DIALOG_ROLES = {"AXSheet", "AXDialog"}
+_DIALOG_SUBROLES = {"AXApplicationAlertDialog", "AXDialog", "AXSystemDialog"}
+
+
+def _is_dialog_role(element) -> bool:
+    if (_attr(element, "AXRole") or "") in _DIALOG_ROLES:
+        return True
+    return (_attr(element, "AXSubrole") or "") in _DIALOG_SUBROLES
+
+
 def _is_visible(element) -> bool:
     """Skip hidden/offscreen elements: a dismissed dialog lingers briefly in the
     tree and would otherwise be approved a second time."""
-    hidden = _attr(element, "AXHidden")
-    if hidden:
+    if _attr(element, "AXHidden"):
         return False
-    # AXFrame/AXSize of zero is the other tell-tale of a torn-down element.
-    size = _attr(element, "AXSize")
-    if size is not None:
-        try:
-            w, h = size.sizeValue() if hasattr(size, "sizeValue") else (size.width, size.height)
-            if w <= 0 or h <= 0:
-                return False
-        except Exception:
-            pass
+    # A size of zero is the other tell-tale of a torn-down element.
+    size = _ax_size(element)
+    if size is not None and (size[0] <= 0 or size[1] <= 0):
+        return False
     return True
 
 
@@ -144,25 +174,31 @@ class Engine:
                 out.append(app.processIdentifier())
         return out
 
-    def find_dialog_hosts(self, app_element, depth: int = 0, hits=None) -> list:
+    def find_dialog_hosts(self, app_element, depth: int = 0, hits=None, seen=None) -> list:
         """Collect elements whose title matches the dialog, scanning windows and
         their sheets/children. Bounded depth so a pathological tree can't hang the
         sweep.
 
-        >>> The exact shape here is what ax_probe.py confirms. If the probe shows
-        the dialog is always an AXSheet on the browser window, this can be
-        tightened to windows->sheets and stop walking arbitrary children. <<<"""
+        The probe confirmed the dialog's shape on Chrome 152: an AXSheet titled
+        'Allow remote debugging?' on the browser window, wrapping an
+        AXGroup/AXApplicationAlertDialog with the Allow button. Because _children
+        walks AXChildren, AXSheets and AXWindows, one on-screen dialog surfaces
+        through several paths (the probe saw four refs for one alert); dedupe by
+        geometry signature so each real dialog is returned once."""
         if hits is None:
-            hits = []
+            hits, seen = [], set()
         if depth > MAX_TREE_DEPTH:
             return hits
         title = _attr(app_element, "AXTitle") or _attr(app_element, "AXDescription") or ""
-        if DIALOG_PATTERN.match(str(title).strip()):
-            hits.append(app_element)
+        if DIALOG_PATTERN.match(str(title).strip()) and _is_dialog_role(app_element):
+            sig = self._host_signature(app_element)
+            if sig not in seen:
+                seen.add(sig)
+                hits.append(app_element)
             # don't descend into a matched dialog; its buttons are found separately
             return hits
         for child in _children(app_element):
-            self.find_dialog_hosts(child, depth + 1, hits)
+            self.find_dialog_hosts(child, depth + 1, hits, seen)
         return hits
 
     def find_approve_button(self, host, depth: int = 0):
@@ -191,21 +227,27 @@ class Engine:
             self._button_labels(child, depth + 1, out)
         return out
 
-    def _dedupe_key(self, host) -> str:
-        """macOS AX has no GetRuntimeId(). Key on identifier if Chrome sets one,
-        else on (title, position) as the port doc suggests - stable enough for a
-        2-second window, which is all the dedupe needs."""
+    def _host_signature(self, host) -> str:
+        """A stable identity for one on-screen dialog, used both to dedupe the
+        several tree paths that surface it and to dedupe across sweeps. macOS AX
+        has no GetRuntimeId(); Chrome sets no AXIdentifier on this alert (the probe
+        confirmed None), so key on geometry, which the port doc anticipated.
+        Object id() is useless here - every sweep rebuilds the app element and its
+        refs, so id() changes each pass and defeats the dedupe entirely."""
         ident = _attr(host, "AXIdentifier")
         if ident:
             return f"id:{ident}"
-        pos = _attr(host, "AXPosition")
-        try:
-            if pos is not None:
-                p = pos.pointValue() if hasattr(pos, "pointValue") else pos
-                return f"pos:{int(p.x)},{int(p.y)}"
-        except Exception:
-            pass
+        pos = _ax_point(host)
+        size = _ax_size(host)
+        if pos is not None:
+            base = f"pos:{int(pos[0])},{int(pos[1])}"
+            if size is not None:
+                base += f";size:{int(size[0])},{int(size[1])}"
+            return base
         return f"obj:{id(host)}"
+
+    # Back-compat alias for the per-sweep dedupe call site.
+    _dedupe_key = _host_signature
 
     def _press(self, button) -> str | None:
         """AXPress the button. Returns the action name on success, None on failure."""
@@ -227,15 +269,22 @@ class Engine:
                 try:
                     if not _is_visible(host):
                         continue
+                    labels = [b for b in self._button_labels(host) if b]
+                    # A dismissed dialog lingers in the tree for a beat with its
+                    # buttons already gone. Matching its title but finding no
+                    # buttons is that teardown state, not a real prompt - skip it
+                    # quietly so it neither logs noise nor burns a dedupe slot.
+                    if not labels:
+                        continue
+
                     key = self._dedupe_key(host)
                     last = self._seen.get(key)
                     if last is not None and now - last < DEDUPE_SECONDS:
                         continue
                     self._seen[key] = now
 
-                    labels = self._button_labels(host)
                     self.log(f"dialog found (pid={pid}) buttons: "
-                             + ", ".join(f"'{b}'" for b in labels if b))
+                             + ", ".join(f"'{b}'" for b in labels))
 
                     if self.observe:
                         self.log("  observe mode - not clicking", "OBSERVE")
@@ -243,6 +292,8 @@ class Engine:
 
                     button = self.find_approve_button(host)
                     if button is None:
+                        # Real buttons, but none is Allow/Approve (e.g. only "Turn
+                        # off in settings"/"Cancel"). Leave it be and say why.
                         self.log(f"  no button matched /{APPROVE_PATTERN.pattern}/ - left alone", "WARN")
                         continue
 

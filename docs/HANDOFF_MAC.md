@@ -6,6 +6,41 @@
 > session on the actual mac mini — with repo access and native macOS — is the
 > right place to finish.
 
+## STEP 0 — DONE (2026-08-27, real mac mini, Chrome 152)
+
+The probe was run against a live "Allow remote debugging?" prompt and the engine
+was verified end-to-end. Findings, and what changed in `watcher_mac.py`:
+
+- **Trigger:** `--remote-debugging-port` is *ignored* on the default profile
+  (Chrome ≥136 requires a non-default `--user-data-dir`), and a throwaway profile
+  never prompts. The prompt only fires on the **real** profile via
+  chrome://inspect/#remote-debugging → "Remote Debugging" ON; each CDP attach to
+  the DevToolsActivePort browser endpoint then raises it. Consent gates the
+  WebSocket **handshake** itself.
+- **Dialog shape:** an `AXSheet` titled `Allow remote debugging?` on the browser
+  window, wrapping an `AXGroup`/`AXSubrole=AXApplicationAlertDialog`. Buttons:
+  `Turn off in settings`, `Cancel`, `Allow`. `AXPress` on `Allow` works; the
+  anchored `^(allow|approve)$` match hits only `Allow`. **Confirmed the design.**
+- **Bug fixed — dedupe was inert.** `_dedupe_key` read `AXPosition` via a
+  nonexistent `.pointValue()`, silently falling back to `obj:id(host)`, which
+  changes every sweep → no cross-sweep dedupe at all. Now uses `AXValueGetValue`
+  (position+size); verified a 2nd sweep 300 ms later re-presses nothing.
+- **Bug fixed — false positives.** The title also matches the Window-menu
+  `AXMenuItem` and an inner `AXHeading`. Added `_is_dialog_role()` so only real
+  sheet/alert containers count. Torn-down button-less dialogs are now skipped
+  silently (no WARN spam). One on-screen dialog → exactly one host.
+- **Off-screen queued prompts** (parked at negative coords when several clients
+  stack) are real and *do* get approved — this is wanted, it's how parallel
+  attaches clear unattended. Only *dismissed/button-less* dialogs are skipped.
+- **Verified:** continuous loop cleared a live stream of prompts, `[ACTION]` log
+  lines in the exact tray format, written to `~/Library/Application Support/
+  YesDev/yes-dev.log`. Zero WARN. `platform_mac.py` paths + `is_trusted` work.
+
+**Still not run:** the 4-parallel-attach acceptance test in isolation (the box
+had a live chrome-devtools-mcp server on 9222 generating its own prompts, which
+confounds a clean count). Engine correctness itself is confirmed. Next up is
+unchanged: `puffs_mac.py`, then `yes_dev_mac.py`, then packaging.
+
 ## Read these two first
 - `docs/MACOS_PORT.md` — the original design handoff. Still the source of truth
   for the AX approach, the NSWindow flags, the TCC/packaging problem, and the
