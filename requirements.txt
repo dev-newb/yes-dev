@@ -1,2 +1,11 @@
-pystray>=0.19
+# One file for both builds: the markers mean `pip install -r requirements.txt`
+# installs only what your platform actually needs.
 pillow>=9.0
+
+# Windows: the tray, and the UI Automation engine is PowerShell, so nothing else.
+pystray>=0.19; sys_platform == "win32"
+
+# macOS: the status bar, and the Accessibility engine and NSWindow overlay.
+rumps>=0.4; sys_platform == "darwin"
+pyobjc-framework-Cocoa>=9.0; sys_platform == "darwin"
+pyobjc-framework-ApplicationServices>=9.0; sys_platform == "darwin"

@@ -70,7 +70,9 @@ is for when you need your real, signed-in browser.
 
 ## Install
 
-Clone the repo, then follow your platform.
+Clone the repo, then follow your platform. `requirements.txt` covers both -
+its markers install only what your platform needs, so `pip install -r
+requirements.txt` works either place.
 
 ### Windows
 
