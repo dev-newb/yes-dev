@@ -25,6 +25,7 @@ Run it with the repo's Python: `python3 yes_dev_mac.py`.
 from __future__ import annotations
 
 import json
+import random
 import subprocess
 import sys
 import time
@@ -41,9 +42,10 @@ try:
 except ImportError:
     sys.exit("Yes, Dev needs rumps for the status bar:\n    pip3 install rumps")
 
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageOps
 
 import platform_mac
+import puffs                     # the icon is drawn from the same cloud renderer
 from platform_mac import (
     APP_NAME, APP_SLUG, CONFIG_PATH, DATA_DIR, LOG_PATH, TRAY_LOG,
     accessibility_settings_url, ensure_data_dir, is_trusted,
@@ -84,6 +86,12 @@ NOTIFY_CHOICES = [("Floating puffs", "puffs"), ("Toast card", "toast"), ("Silent
 # crisp on retina, the same trick puffs_mac.py uses for the clouds.
 ICON_PT = 20
 ICON_PX = ICON_PT * 2
+ICON_SS = 6          # draw this much larger, then downscale, for clean edges
+ICON_SEED = 7        # one silhouette for every state: the icon must not change
+                     # shape when it changes colour, only its colour
+CHECK_SCALE = 1.34   # the check is oversized on purpose; at 20pt a thin one
+                     # turns to mush
+ICON_VERSION = 2     # bump when the drawing changes, so cached files are dropped
 
 STATE_COLORS = {
     "paused": (218, 54, 51),      # red
@@ -113,19 +121,40 @@ def icon_path(state: str) -> str:
     Separate files rather than one rewritten file: rumps hands the path to
     NSImage's initByReferencingFile_, and a path whose contents changed under it
     is not guaranteed to be re-read.
+
+    The icon is the app's own cloud - the very shape puffs_mac.py drops from the
+    status item - turned upside down so it hangs from the menu bar the way those
+    clouds do, filled with the state colour, with a white check in front of it.
+    The Windows build uses a plain circle; a circle reads as a dot in a row of
+    menu extras, where the silhouette is the only thing that identifies an app.
     """
     ensure_data_dir()
-    path = DATA_DIR / f"icon-{state}.png"
-    if not path.exists():
-        img = Image.new("RGBA", (ICON_PX, ICON_PX), (0, 0, 0, 0))
-        d = ImageDraw.Draw(img)
-        colour = STATE_COLORS.get(state, STATE_COLORS["off"])
-        d.ellipse([1, 1, ICON_PX - 2, ICON_PX - 2], fill=colour)
-        # Checkmark: it says yes. Same proportions as the Windows 64px icon.
-        s = ICON_PX / 64.0
-        d.line([(18 * s, 33 * s), (28 * s, 44 * s), (46 * s, 20 * s)],
-               fill=(255, 255, 255, 255), width=max(2, int(8 * s)), joint="curve")
-        img.save(path)
+    path = DATA_DIR / f"icon-{state}-v{ICON_VERSION}.png"
+    if path.exists():
+        return str(path)
+
+    R = ICON_PX * ICON_SS
+    canvas = Image.new("RGBA", (R, R), (0, 0, 0, 0))
+
+    # Seeded, so all four states share one silhouette - _render_cloud jitters its
+    # lobes per call, and an icon that changed shape on every state change would
+    # look like a different app rather than the same one in a different mood.
+    random.seed(ICON_SEED)
+    mask = ImageOps.flip(puffs._render_cloud(R, premultiply=False).split()[3])
+    body = Image.new("RGBA", mask.size,
+                     STATE_COLORS.get(state, STATE_COLORS["off"]) + (255,))
+    body.putalpha(mask)
+    canvas.alpha_composite(body, (0, (R - mask.size[1]) // 2))
+
+    # Nudged up slightly: flipped, the cloud's mass sits above its centre line.
+    d = ImageDraw.Draw(canvas)
+    cx, cy = R / 2, R / 2 - 0.02 * R
+    s = R * 0.0092 * CHECK_SCALE
+    d.line([(cx - 13 * s, cy + 0.5 * s), (cx - 4.5 * s, cy + 9.5 * s),
+            (cx + 13.5 * s, cy - 10 * s)],
+           fill=(255, 255, 255, 255), width=int(5.6 * s), joint="curve")
+
+    canvas.resize((ICON_PX, ICON_PX), Image.LANCZOS).save(path)
     return str(path)
 
 
