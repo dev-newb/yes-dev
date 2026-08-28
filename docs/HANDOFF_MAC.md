@@ -55,13 +55,19 @@ source of truth for the artwork and the timing.
   sized in points, so it is a crisp 2x asset rather than an upscaled 1x one.
 - **The one real behavioural difference from Windows, and why.** The Windows tray
   is at the *bottom*, so a cloud is released there and rises away into open
-  desktop. The macOS status item is at the *top*. Anchoring the spawn to it (the
-  obvious translation) was tried first and measured: clouds crossed the menu bar
-  within a second and spent the rest of their life off-screen, still ~40% opaque.
-  So the arc is anchored by its **end** instead — a cloud rises *toward* the
-  status item and evaporates just below it, with `SPAWN_Y_UP` keeping its meaning
-  as the jittered gap from the menu bar. The whole arc is on screen for every
-  speed/lifetime combination, and the menu bar is never overlapped.
+  desktop. The macOS status item is at the *top*, so "away from it" is **down**:
+  a cloud is released just under the menu bar and drifts downward. (Rising was
+  tried first and measured — clouds crossed the menu bar within a second and
+  spent the rest of their life off-screen, still ~40% opaque.) Two details follow
+  from that, both settled by looking at it on the real display:
+  - `SPAWN_Y_DOWN = (6, 54)` replaces `SPAWN_Y_UP` as the release gap. The
+    Windows range is measured off a ~48 px taskbar; against a 30 pt menu bar the
+    same numbers put a cloud up to four bar-heights away and it reads as
+    appearing in mid-air rather than coming off the status item.
+  - The silhouette is flipped (`_flip_hanging`): the cloud hangs from the bar
+    rather than sitting on something, so the flat side goes up and the lobes
+    hang below. Only the **alpha mask** is flipped — flipping the whole image
+    takes the vertical shading with it and lights the cloud from below.
 - **Not verified by eye:** taking a screenshot needs a Screen Recording (TCC)
   grant this session did not have, so the geometry/alpha/level/teardown were
   checked through `CGWindowListCopyWindowInfo` instead, and the artwork was

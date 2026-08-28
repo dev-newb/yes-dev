@@ -1,8 +1,8 @@
 """Floating puff notifications for macOS - the NSWindow counterpart of puffs.py.
 
-Each approval releases a small translucent cloud near the status item, which
-drifts up and fades out. Everything is jittered so a burst scatters instead of
-stacking into one blob.
+Each approval releases a small translucent cloud from under the status item,
+which drifts down and fades out. Everything is jittered so a burst scatters
+instead of stacking into one blob.
 
 The artwork and the shape of a cloud's life are imported from puffs.py rather
 than restated here, so the Windows overlay, the documentation art and this one
@@ -15,11 +15,13 @@ can never quietly drift apart. Only the window system differs:
     WS_EX_TRANSPARENT/NOACTIVATE       setIgnoresMouseEvents_ / orderFrontRegardless
     y decreases going up               y *increases* going up (origin bottom-left)
     SPI_GETWORKAREA                    NSScreen.visibleFrame
-    released at the tray, rises away   rises *toward* the status item (see _Puff)
+    released at the tray, rises away   released under the status item, drifts down
+    cloud sits on its flat base        cloud hangs from it (see _flip_hanging)
 
-That last row is the one real behavioural difference, and it is forced: the tray
-is at the bottom of the screen and the status item is at the top, so a cloud
-released level with the item would leave the screen at once. See _Puff.__init__.
+That last row is the one real behavioural difference, and it is forced by where
+the app lives: the Windows tray is at the bottom of the screen, so "away from
+it" is up; the macOS status item is at the top, so "away from it" is down. See
+_Puff.__init__.
 
 Same contract as `puffs.py --serve`, so the tray does not care which one it is
 talking to: one integer per line on stdin means "show that many clouds";
@@ -50,6 +52,8 @@ except ImportError:  # allow running from another cwd
         ALPHA_RANGE, DRIFT_RANGE, FRAME_MS, IDLE_MS, LIFE_RANGE, MAX_LIVE,
         RISE_RANGE, SIZE_RANGE, SPAWN_X_BACK, SPAWN_Y_UP, _render_cloud,
     )
+
+from PIL import Image, ImageOps
 
 try:
     from platform_mac import DATA_DIR, ensure_data_dir
@@ -83,6 +87,18 @@ except ImportError:
         "    pip3 install pyobjc-framework-Cocoa"
     )
 
+# Where a cloud is released, as a gap in points below the menu bar.
+#
+# This is the one motion range that is *not* imported from puffs.py, and the
+# reason is the furniture it is measured against. SPAWN_Y_UP is (45, 120) px off
+# a Windows taskbar around 48 px tall - so at its nearest a cloud sits about one
+# taskbar-height above the tray. The macOS menu bar is 30 pt, so reusing those
+# numbers puts a cloud up to four bar-heights away, and it reads as appearing in
+# mid-air rather than coming off the status item. Same intent, scaled to the
+# furniture: the nearest clouds hug the bar, the furthest are a couple of
+# bar-heights down.
+SPAWN_Y_DOWN = (6, 54)
+
 # Above normal windows, on every Space, and never in the window cycle. Stationary
 # keeps a cloud from sliding when the user switches Spaces mid-flight.
 _COLLECTION = (NSWindowCollectionBehaviorCanJoinAllSpaces
@@ -114,6 +130,22 @@ def _status_screen():
     """
     screens = NSScreen.screens()
     return screens[0] if screens else NSScreen.mainScreen()
+
+
+def _flip_hanging(art):
+    """Turn a sitting cloud into a hanging one.
+
+    _render_cloud draws a cloud that rests on something: flat base, lobes on top,
+    lit from above. Here it comes off the underside of the menu bar, so the flat
+    side belongs against the bar with the lobes hanging below it.
+
+    Only the alpha mask - the silhouette - is flipped. Flipping the whole image
+    would take the vertical shading with it and light the cloud from below, which
+    looks wrong under a menu bar. Keeping the RGB gradient as it is leaves the
+    light where every other pixel on the screen has it: above.
+    """
+    r, g, b, a = art.split()
+    return Image.merge("RGBA", (r, g, b, ImageOps.flip(a)))
 
 
 def _ns_image(pil_image, point_size) -> NSImage:
@@ -151,7 +183,9 @@ class _Puff:
         self.size = random.randint(*SIZE_RANGE)
         self.alpha0 = random.uniform(*ALPHA_RANGE)
         self.life = random.uniform(*LIFE_RANGE)            # seconds
-        self.rise = random.uniform(*RISE_RANGE)            # px/sec
+        # RISE_RANGE is the shared speed range; here it carries the cloud *down*,
+        # away from the menu bar. Same magnitudes, opposite direction.
+        self.fall = random.uniform(*RISE_RANGE)            # px/sec
         self.drift = random.uniform(*DRIFT_RANGE)          # px/sec
         self.born = time.perf_counter()
 
@@ -159,26 +193,27 @@ class _Puff:
         # Windows build anchors to the tray.
         self.x0 = float(area.origin.x + area.size.width - random.randint(*SPAWN_X_BACK))
 
-        # The vertical anchor is the one thing that cannot be copied across. The
-        # Windows tray sits at the *bottom*, so a cloud is released there and
+        # The vertical direction is the one thing that cannot be copied across.
+        # The Windows tray sits at the *bottom*, so a cloud is released there and
         # rises away into open desktop. The macOS status item sits at the *top*,
-        # where "rise away from it" means "leave the screen immediately": spawned
-        # level with the item, a cloud crosses the menu bar within a second and
-        # spends the rest of its life off-screen, still half opaque (measured).
+        # so "away from it" is downward: a cloud is released just under the menu
+        # bar and drifts down, which keeps the whole arc on screen and never
+        # covers the menu bar. Rising instead was tried and measured - the cloud
+        # crossed the menu bar within a second and spent the rest of its life
+        # off-screen, still half opaque.
         #
-        # So the arc is anchored by its END instead: the cloud rises *toward* the
-        # status item and evaporates just below it. SPAWN_Y_UP keeps its meaning
-        # as the jittered gap from the menu bar, and working backwards by this
-        # cloud's own travel puts the whole arc on screen whatever its speed and
-        # lifetime. The window top ends below visibleFrame, so the menu bar is
-        # never overlapped.
-        top = area.origin.y + area.size.height
-        self.y_end = float(top - random.randint(*SPAWN_Y_UP))
-        self.y0 = self.y_end - self.rise * self.life
-
-        art = _render_cloud(int(round(self.size * scale)), premultiply=False)
+        # SPAWN_Y_DOWN is the jittered gap below the bar; see its definition for
+        # why it is not SPAWN_Y_UP.
+        art = _flip_hanging(_render_cloud(int(round(self.size * scale)),
+                                          premultiply=False))
         self.w = art.width / scale
         self.h = art.height / scale
+
+        # An NSWindow's origin is its bottom-left, so subtracting the height puts
+        # the gap between the bar and the *top* of the cloud, which is the edge
+        # the eye measures from.
+        top = area.origin.y + area.size.height
+        self.y0 = float(top - random.randint(*SPAWN_Y_DOWN) - self.h)
 
         self.win = None
         try:
@@ -220,7 +255,10 @@ class _Puff:
         frac = t / self.life
         alpha = self.alpha0 * (1.0 - frac)                 # linear, as tuned
         x = self.x0 + self.drift * t
-        y = self.y0 + self.rise * t     # macOS origin is bottom-left: up is +y
+        # macOS origin is bottom-left, so drifting *down* from the status item is
+        # -y. (On Windows, rising from the tray is also -y. Same sign, opposite
+        # direction - which is exactly the trap the port doc warned about.)
+        y = self.y0 - self.fall * t
 
         try:
             if (int(x), int(y)) != (int(self._shown[0]), int(self._shown[1])):
