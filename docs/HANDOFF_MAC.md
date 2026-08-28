@@ -67,7 +67,41 @@ source of truth for the artwork and the timing.
   checked through `CGWindowListCopyWindowInfo` instead, and the artwork was
   inspected as a rendered PNG. Worth one human glance at a real burst.
 
-Next up: `yes_dev_mac.py` (the tray), then packaging.
+## `yes_dev_mac.py` — WRITTEN AND VERIFIED (2026-08-27)
+
+The status-bar tray is done and was run for real: it appears in the menu bar,
+supervises the engine, tails the log, counts approvals and emits puffs. Verified
+live through the Accessibility API (reading its own menu) rather than by eye.
+
+- **Observed running:** menu showed `Status: on`, `Approved: 4` climbing from
+  real Chrome prompts, `Accessibility: granted`, and every radio group with
+  exactly one correct check mark. Engine and overlay ran as child processes.
+  Pressing **Quit** from the menu tore down all three cleanly (exit 0).
+- **21 logic checks pass** (`Config` round-trip, `[ACTION]` counting, non-ACTION
+  lines ignored, burst→pause, auto-resume, no re-pause while paused, ask-mode
+  dialog spawned exactly once, empty answer = stop, `allow_hour` snooze, log
+  rotation, menu/radio state) — all against a temp config, never the live one.
+- **Autostart** plist generation verified in a sandbox (valid plist, venv
+  interpreter, correct `launchctl bootstrap`/`bootout`). Deliberately **not**
+  installed for real — that is a standing change for the user to make from the
+  menu. Surviving a real logout/login is still unproven, as on Windows.
+- **One design change forced by AppKit.** The Windows build runs its monitor on
+  a worker thread and blocks it for up to 30 s on the burst dialog, which is
+  also what stops a second dialog being raised. AppKit menu updates must happen
+  on the main thread, so the tick is a `rumps.Timer` and nothing in it may
+  block: the burst dialog is now spawned and its answer collected on a later
+  tick, with an explicit `_asking` guard against re-entry. Same semantics,
+  responsive menu.
+- **New menu item Windows never needed:** an Accessibility status line that
+  prompts for the grant and deep-links to the settings pane.
+- **Known limitation:** `notify_style: "toast"` degrades to log-only. Notification
+  Center refuses notifications from an unbundled script; it will work once the
+  app is packaged and signed. Puffs (the default) are unaffected.
+
+To run it: `python3 yes_dev_mac.py` (use the venv that has pyobjc/rumps/pillow).
+
+Next up: packaging — the signed `.app` so the Accessibility grant attaches to
+Yes, Dev instead of to the Python binary.
 
 ## Read these two first
 - `docs/MACOS_PORT.md` — the original design handoff. Still the source of truth
