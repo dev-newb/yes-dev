@@ -253,15 +253,22 @@ looks wrong hanging under a menu bar.
 Neither picture is a mock-up or a hand-arranged row. `docs/make_art.py` and
 `docs/make_art_mac.py` replay a real burst and freeze it mid-flight, taking the
 shapes, spawn positions, speed, drift and fade straight from `puffs.py` and
-`puffs_mac.py`, so the art cannot drift from the app. They are shown on a dark
-ground because the clouds are built to read over a taskbar and would be nearly
-invisible on a white page; `docs/clouds.png` and `docs/clouds-mac.png` are the
-same images with transparent backgrounds, and `docs/cloud.png` is a single
-cloud, for reuse elsewhere.
+`puffs_mac.py`, so the art cannot drift from the app. The two generators are
+built the same way and to the same size, so the pair sits level and any
+difference you see between them is a real difference in the app rather than an
+artefact of how the picture was made.
 
-The macOS status icon is drawn from the same renderer, so the icon and the
-notification are literally the same shape rather than two things that merely
-resemble each other.
+The bar along the edge of each - taskbar below, menu bar above - is a
+genericized stand-in, but the app's own icon on it is the real one, drawn from
+the same code the app uses: a green circle with a check in the Windows tray, and
+on macOS the cloud itself, flipped and filled, so the icon and the notification
+are literally the same shape rather than two things that merely resemble each
+other. The neighbouring icons are placeholders, there for scale.
+
+Both are shown on a dark ground because the clouds are built to read over a
+taskbar and would be nearly invisible on a white page. `docs/clouds.png` and
+`docs/clouds-mac.png` are the same frames with transparent backgrounds and no
+bar, and `docs/cloud.png` is a single cloud, for reuse elsewhere.
 
 #### Windows: layered windows
 
