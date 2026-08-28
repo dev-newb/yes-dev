@@ -38,8 +38,36 @@ was verified end-to-end. Findings, and what changed in `watcher_mac.py`:
 
 **Still not run:** the 4-parallel-attach acceptance test in isolation (the box
 had a live chrome-devtools-mcp server on 9222 generating its own prompts, which
-confounds a clean count). Engine correctness itself is confirmed. Next up is
-unchanged: `puffs_mac.py`, then `yes_dev_mac.py`, then packaging.
+confounds a clean count). Engine correctness itself is confirmed.
+
+## `puffs_mac.py` — WRITTEN AND VERIFIED (2026-08-27)
+
+The NSWindow clouds overlay is done and measured on the real machine. It imports
+`_render_cloud` and every motion range from `puffs.py`, so there is still one
+source of truth for the artwork and the timing.
+
+- **Verified:** windows appear at `NSStatusWindowLevel` (CGWindowList layer 25),
+  rise, fade linearly to ~0, and leave **nothing** behind (0 windows after the
+  arcs finish, 0 after exit, exit code 0). Idle cost ~0.01 s CPU per 3 s. A burst
+  of 100 peaked at 37 live windows against the `MAX_LIVE = 40` cap. The real
+  `PuffClient(script=...)` spawn path works unchanged on macOS.
+- **Retina:** the art is rendered at `backingScaleFactor` and the NSImage is then
+  sized in points, so it is a crisp 2x asset rather than an upscaled 1x one.
+- **The one real behavioural difference from Windows, and why.** The Windows tray
+  is at the *bottom*, so a cloud is released there and rises away into open
+  desktop. The macOS status item is at the *top*. Anchoring the spawn to it (the
+  obvious translation) was tried first and measured: clouds crossed the menu bar
+  within a second and spent the rest of their life off-screen, still ~40% opaque.
+  So the arc is anchored by its **end** instead — a cloud rises *toward* the
+  status item and evaporates just below it, with `SPAWN_Y_UP` keeping its meaning
+  as the jittered gap from the menu bar. The whole arc is on screen for every
+  speed/lifetime combination, and the menu bar is never overlapped.
+- **Not verified by eye:** taking a screenshot needs a Screen Recording (TCC)
+  grant this session did not have, so the geometry/alpha/level/teardown were
+  checked through `CGWindowListCopyWindowInfo` instead, and the artwork was
+  inspected as a rendered PNG. Worth one human glance at a real burst.
+
+Next up: `yes_dev_mac.py` (the tray), then packaging.
 
 ## Read these two first
 - `docs/MACOS_PORT.md` — the original design handoff. Still the source of truth
