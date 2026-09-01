@@ -43,6 +43,7 @@ try:
 except ImportError:
     sys.exit("Yes, Dev needs rumps for the status bar:\n    pip3 install rumps")
 
+from AppKit import NSApplication, NSApplicationActivationPolicyAccessory
 from PIL import Image, ImageDraw, ImageOps
 
 import platform_mac
@@ -673,6 +674,13 @@ def main() -> int:
     if not platform_mac.acquire_single_instance("tray"):
         log("another instance is already running - exiting")
         return 0
+
+    # A bare `python3 yes_dev_mac.py` run has no Info.plist to set
+    # LSUIElement, so AppKit defaults to a regular app - Dock icon, Cmd-Tab
+    # entry, the lot. Accessory matches what a proper .app bundle would
+    # declare: menu-bar item only, no Dock presence.
+    NSApplication.sharedApplication().setActivationPolicy_(
+        NSApplicationActivationPolicyAccessory)
 
     app = YesDev()
     if not is_trusted():
