@@ -259,6 +259,8 @@ class YesDev(rumps.App):
             args.append("--observe")
         if self.cfg["include_edge"]:
             args.append("--include-edge")
+        if self.cfg.get("diagnostics"):
+            args.append("--diagnostics")
 
         # Only surface approvals logged from here on, not the whole history.
         self._log_pos = LOG_PATH.stat().st_size if LOG_PATH.exists() else 0
