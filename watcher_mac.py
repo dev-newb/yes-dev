@@ -9,13 +9,21 @@ log for each approval, in the existing format
 
 and the counter, the clouds and the burst guard in the tray all work unchanged.
 
-  >>> UNVERIFIED <<<  Written without a Mac to test on, from docs/MACOS_PORT.md.
-  The AX attribute names and, above all, WHERE the dialog sits in the tree
-  (AXSheet on the window? separate AXWindow? nested deeper?) are the informed
-  guess that docs/mac/ax_probe.py exists to confirm. Run the probe first and
-  reconcile find_dialog_hosts() with what it prints before trusting this.
+The dialog's shape in the accessibility tree, confirmed against a live prompt on
+Chrome 152, is an AXSheet on the browser window wrapping an alert:
 
-Runs standalone for exactly that shake-out:
+    AXWindow  "<tab title> - Google Chrome"
+      AXSheet  "Allow remote debugging?"
+        AXGroup / AXSubrole=AXApplicationAlertDialog
+          AXButton  "Turn off in settings" | "Cancel" | "Allow"
+
+Two things that title alone will not tell you, and which find_dialog_hosts()
+therefore guards against: the same title is also carried by the Window menu's
+AXMenuItem and by an AXHeading inside the dialog, so the role has to match too;
+and Chrome sets no AXIdentifier here, so dedupe keys on position and size.
+`docs/mac/ax_probe.py` re-dumps the tree if a future Chrome moves it.
+
+Runs standalone:
 
     python3 watcher_mac.py --observe        # log dialogs and buttons, never click
     python3 watcher_mac.py --once           # one sweep, then exit (prints findings)

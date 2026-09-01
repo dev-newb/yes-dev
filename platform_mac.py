@@ -118,10 +118,10 @@ def accessibility_settings_url() -> str:
 # LaunchAgent plist under ~/Library/LaunchAgents. RunAtLoad starts it at login;
 # KeepAlive is deliberately false so a user Quit stays quit until next login.
 #
-# Note on packaging (see docs/MACOS_PORT.md): run as a loose script and the
-# Accessibility grant attaches to the python binary, which is fragile and far
-# too broad. A signed .app should instead register a login item with
-# SMAppService. This plist is the script-mode path, useful during development.
+# Note on packaging: run as a loose script and the Accessibility grant attaches
+# to the python binary, which is fragile and far too broad. A signed .app should
+# instead register a login item with SMAppService. This plist is the script-mode
+# path, useful during development.
 
 _PLIST_TEMPLATE = """<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
