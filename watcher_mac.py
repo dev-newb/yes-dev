@@ -8,9 +8,12 @@ log for each approval, in the existing format
     2026-08-27 16:11:28.644 [ACTION]   APPROVED via AXPress
 
 and the counter, the clouds and the burst guard in the tray all work unchanged.
-`[ACTION]` is only written after the sheet is gone. Chromium's Views buttons on
-macOS accept AXPress and do nothing, so a leftover sheet falls through to a
-CGEvent click at the Allow button's center.
+`[ACTION]` is only written after the sheet is gone - and "gone" is judged by the
+identity of the AX refs that were pressed (a dismissed sheet's refs answer every
+read with AXError -25202), never by whether something still sits at its
+coordinates: Chrome queues these prompts when several CDP clients connect at
+once and draws the next one exactly where the last one was. A sheet that
+survives AXPress falls through to a CGEvent click at the Allow button's center.
 
 The dialog's shape in the accessibility tree, confirmed against a live prompt on
 Chrome 152, is an AXSheet on the browser window wrapping an alert:
@@ -61,6 +64,7 @@ try:
         AXUIElementCopyAttributeValue,
         AXUIElementPerformAction,
         AXValueGetValue,
+        kAXErrorInvalidUIElement,
         kAXErrorSuccess,
         kAXValueCGPointType,
         kAXValueCGSizeType,
@@ -125,6 +129,25 @@ def _attr(element, name):
     except Exception:
         return None
     return value if err == kAXErrorSuccess else None
+
+
+def _ref_alive(element) -> bool | None:
+    """Whether an AX ref still points at a live node - the one thing _attr's
+    None cannot say, since it also covers a merely empty attribute.
+
+    True: the node answered. False: kAXErrorInvalidUIElement (-25202), which is
+    what a dismissed sheet and every button under it return on any read once
+    Chrome tears the dialog down, and which a live node never returns. None:
+    no answer either way (Chrome busy, AX unreachable) - proof of nothing."""
+    try:
+        err, _ = AXUIElementCopyAttributeValue(element, "AXRole", None)
+    except Exception:
+        return None
+    if err == kAXErrorSuccess:
+        return True
+    if err == kAXErrorInvalidUIElement:
+        return False
+    return None
 
 
 def _children(element):
@@ -346,16 +369,27 @@ class Engine:
         except Exception:
             pass
 
-    def _sheet_still_up(self, app, key: str) -> bool:
-        """Return True when the same dialog signature is still visible with buttons."""
-        for host in self.find_dialog_hosts(app):
-            if not _is_visible(host):
-                continue
-            if not [label for label in self._button_labels(host) if label]:
-                continue
-            if self._host_signature(host) == key:
-                return True
-        return False
+    def _sheet_still_up(self, host, button) -> bool:
+        """True while the sheet that was pressed - that AX node, not whatever
+        now sits at its coordinates - is still on screen with its Allow button.
+
+        Identity, not geometry. Chrome queues the consent prompt when several
+        CDP clients connect at once and draws the next one at exactly the
+        position and size of the one just dismissed, so re-scanning and
+        matching a signature reported "still up" for a sheet that was gone,
+        and a real approval became a FAILED line the tray's burst guard never
+        counted. A dismissed sheet's refs go invalid instead (-25202 on any
+        read, verified on Chrome 152), and only a node that is really gone
+        does that. AXPress that Chrome ignored, or a teardown slower than
+        VERIFY_WAIT_S, leaves the same refs valid and visible: the CGEvent case."""
+        host_alive = _ref_alive(host)
+        if host_alive is False or _ref_alive(button) is False:
+            return False
+        if host_alive is None:
+            # No answer is not a dismissal: no [ACTION] on this pass. If the
+            # sheet is really gone the next sweep simply finds nothing.
+            return True
+        return _is_visible(host)
 
     def _hw_click(self, x: float, y: float) -> bool:
         """Left-click global point (x, y), then put the cursor back. Returns False if Quartz is missing."""
@@ -380,24 +414,30 @@ class Engine:
         except Exception:
             return False
 
-    def _approve(self, app, host, button, key: str) -> str | None:
+    def _approve(self, host, button) -> str | None:
         """Dismiss the consent sheet. Returns how it fell only after the sheet is gone."""
         self._raise_host(host)
         ax_ok = self._press(button) is not None
         time.sleep(VERIFY_WAIT_S)
-        if not self._sheet_still_up(app, key):
+        if not self._sheet_still_up(host, button):
             return "AXPress" if ax_ok else "AXRaise"
 
+        # Geometry from the live button ref, read now, so the click targets
+        # this button wherever it is - never a queued successor's coordinates.
         pos = _ax_point(button)
         size = _ax_size(button)
         if pos is None or size is None:
+            # It stopped answering between the check and the read: if the ref
+            # has gone invalid, AXPress did land and teardown just finished.
+            if not self._sheet_still_up(host, button):
+                return "AXPress" if ax_ok else "AXRaise"
             return None
         x, y = _button_center(pos, size)
         self.log(f"  AXPress left sheet up; CGEvent click at ({x:.1f}, {y:.1f})", "AUDIT")
         if not self._hw_click(x, y):
             return None
         time.sleep(VERIFY_WAIT_S)
-        if not self._sheet_still_up(app, key):
+        if not self._sheet_still_up(host, button):
             return "CGEvent"
         return None
 
@@ -478,15 +518,19 @@ class Engine:
 
                     self.log(f"approval pending host={key} siblings={labels!r} "
                              f"target={self._element_summary(button)}", "AUDIT")
-                    how = self._approve(app, host, button, key)
+                    how = self._approve(host, button)
+                    # The dedupe slot has done its job either way. On success
+                    # the pressed sheet is verified gone, and a queued prompt
+                    # Chrome draws at the same coordinates carries the same
+                    # key: it must be served next sweep, not after
+                    # DEDUPE_SECONDS. On failure a leftover sheet is retried
+                    # next sweep instead of sitting out the window.
+                    self._seen.pop(key, None)
                     if how:
                         self.approved += 1
                         self.log(f"  APPROVED via {how}", "ACTION")
                         self.log(f"  total approved this session: {self.approved}")
                     else:
-                        # Drop the dedupe entry so a leftover sheet is retried
-                        # on the next sweep instead of sitting out the window.
-                        self._seen.pop(key, None)
                         self.log("  FAILED: sheet still up after AXPress/CGEvent", "ERROR")
                 except Exception as exc:
                     self.log(f"  host error: {exc!r}", "ERROR")
