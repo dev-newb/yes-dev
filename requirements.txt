@@ -6,6 +6,11 @@ pillow>=9.0
 pystray>=0.19; sys_platform == "win32"
 
 # macOS: the status bar, and the Accessibility engine and NSWindow overlay.
+# pyobjc-framework-Quartz is the CGEvent fallback click - AXPress alone doesn't
+# always get Chrome's Views button to actually accept the click (see
+# watcher_mac.py's _hw_click). Was installed by hand and missing from here
+# until a fresh-box install exposed the gap.
 rumps>=0.4; sys_platform == "darwin"
 pyobjc-framework-Cocoa>=9.0; sys_platform == "darwin"
 pyobjc-framework-ApplicationServices>=9.0; sys_platform == "darwin"
+pyobjc-framework-Quartz>=9.0; sys_platform == "darwin"
