@@ -20,11 +20,18 @@ Chrome 152, is an AXSheet on the browser window wrapping an alert:
         AXGroup / AXSubrole=AXApplicationAlertDialog
           AXButton  "Turn off in settings" | "Cancel" | "Allow"
 
-Two things that title alone will not tell you, and which find_dialog_hosts()
-therefore guards against: the same title is also carried by the Window menu's
-AXMenuItem and by an AXHeading inside the dialog, so the role has to match too;
-and Chrome sets no AXIdentifier here, so dedupe keys on position and size.
-`docs/mac/ax_probe.py` re-dumps the tree if a future Chrome moves it.
+Two things that title alone will not tell you: the same title is also carried
+by the Window menu's AXMenuItem and by an AXHeading inside the dialog, so the
+role has to match too - though find_dialog_hosts() only ever reads a Chrome
+process's AXWindows and their AXSheets, so neither is actually reachable; the
+role check is defense in depth, not the only thing standing between it and a
+false positive. That scope is also the perf fix: earlier builds walked every
+AXChild up to twelve levels deep, which on a loaded page means the page's own
+AX-exposed DOM, on every single poll (confirmed at ~150-160ms/pid via
+--diagnostics). The dialog only ever lives two AX reads from the app root, so
+that's all this looks at now. And Chrome sets no AXIdentifier here, so dedupe
+keys on position and size. `docs/mac/ax_probe.py` re-dumps the tree if a
+future Chrome moves it.
 
 Runs standalone:
 
@@ -97,7 +104,6 @@ APPROVE_PATTERN = re.compile(r"^(allow|approve)$", re.I)
 POLL_MS_DEFAULT = 250
 DEDUPE_SECONDS = 2.0     # don't re-press one dialog mid-teardown ...
 DEDUPE_MAX = 400         # ... but cap the memory so a long run can't grow forever
-MAX_TREE_DEPTH = 12
 # ponytail: fixed sleep, not AX notification. Bump if Chrome teardown gets slower.
 VERIFY_WAIT_S = 0.5
 
@@ -227,32 +233,46 @@ class Engine:
             out.extend(app.processIdentifier() for app in apps)
         return out
 
-    def find_dialog_hosts(self, app_element, depth: int = 0, hits=None, seen=None) -> list:
-        """Collect elements whose title matches the dialog, scanning windows and
-        their sheets/children. Bounded depth so a pathological tree can't hang the
-        sweep.
+    def find_dialog_hosts(self, app_element, diag: list[str] | None = None) -> list:
+        """Collect elements whose title matches the dialog.
 
-        The probe confirmed the dialog's shape on Chrome 152: an AXSheet titled
-        'Allow remote debugging?' on the browser window, wrapping an
-        AXGroup/AXApplicationAlertDialog with the Allow button. Because _children
-        walks AXChildren, AXSheets and AXWindows, one on-screen dialog surfaces
-        through several paths (the probe saw four refs for one alert); dedupe by
-        geometry signature so each real dialog is returned once."""
-        if hits is None:
-            hits, seen = [], set()
-        if depth > MAX_TREE_DEPTH:
-            return hits
-        title = _attr(app_element, "AXTitle") or _attr(app_element, "AXDescription") or ""
-        if DIALOG_PATTERN.match(str(title).strip()) and _is_dialog_role(app_element):
-            sig = self._host_signature(app_element)
-            if sig not in seen:
-                seen.add(sig)
-                hits.append(app_element)
-            # don't descend into a matched dialog; its buttons are found separately
-            return hits
-        for child in _children(app_element):
-            self.find_dialog_hosts(child, depth + 1, hits, seen)
+        The dialog is an AXSheet titled 'Allow remote debugging?' one level
+        below a browser AXWindow - confirmed on Chrome 152, but *which*
+        attribute exposes it there is not stable. A live probe against a real
+        prompt found window.AXSheets returning fourteen entries, every one a
+        stale/invalid ref (AXError -25202), while the actual sheet showed up
+        as a plain entry in window.AXChildren instead. So both are checked,
+        one level deep, no further - which is still nothing like the old
+        depth-12 recursive walk (~150-160ms/pid, see --diagnostics): a
+        window's AXChildren here is a handful of top-level regions (toolbar,
+        tab strip, the sheet if any, the web area), not the page's own
+        AX-exposed DOM, which only appears if you recurse *into* the web-area
+        child - and this doesn't."""
+        hits: list = []
+        seen: set = set()
+        windows = _attr(app_element, "AXWindows") or []
+        if diag is not None:
+            diag.append(f"windows={len(windows)}")
+        for window in windows:
+            title = _attr(window, "AXTitle") or ""
+            if DIALOG_PATTERN.match(str(title).strip()) and _is_dialog_role(window):
+                self._add_host(window, hits, seen)
+            candidates = (_attr(window, "AXSheets") or []) + (_attr(window, "AXChildren") or [])
+            if diag is not None:
+                diag.append(f"candidates={len(candidates)}")
+            for candidate in candidates:
+                title = _attr(candidate, "AXTitle") or _attr(candidate, "AXDescription") or ""
+                if DIALOG_PATTERN.match(str(title).strip()) and _is_dialog_role(candidate):
+                    self._add_host(candidate, hits, seen)
         return hits
+
+    def _add_host(self, host, hits: list, seen: set) -> None:
+        """Append host if its geometry signature hasn't already surfaced this
+        sweep - a window and its sheet can't collide, but stay defensive."""
+        sig = self._host_signature(host)
+        if sig not in seen:
+            seen.add(sig)
+            hits.append(host)
 
     def find_approve_button(self, host, depth: int = 0):
         """The Allow button within one dialog subtree. Scoped to the dialog, never
@@ -418,11 +438,12 @@ class Engine:
         for pid in chrome_pids:
             app = AXUIElementCreateApplication(pid)
             scan_started = time.monotonic()
-            hosts = self.find_dialog_hosts(app)
+            diag: list[str] = [] if is_diagnostic_sweep else None
+            hosts = self.find_dialog_hosts(app, diag=diag)
             if is_diagnostic_sweep:
                 scan_ms = int((time.monotonic() - scan_started) * 1000)
-                self.log(f"diagnostic AX pid={pid} hosts={len(hosts)} ({scan_ms}ms)",
-                         "DIAG")
+                self.log(f"diagnostic AX pid={pid} hosts={len(hosts)} "
+                         f"({scan_ms}ms) {' '.join(diag)}", "DIAG")
             for host in hosts:
                 try:
                     if not _is_visible(host):
