@@ -8,6 +8,9 @@ log for each approval, in the existing format
     2026-08-27 16:11:28.644 [ACTION]   APPROVED via AXPress
 
 and the counter, the clouds and the burst guard in the tray all work unchanged.
+`[ACTION]` is only written after the sheet is gone. Chromium's Views buttons on
+macOS accept AXPress and do nothing, so a leftover sheet falls through to a
+CGEvent click at the Allow button's center.
 
 The dialog's shape in the accessibility tree, confirmed against a live prompt on
 Chrome 152, is an AXSheet on the browser window wrapping an alert:
@@ -17,11 +20,18 @@ Chrome 152, is an AXSheet on the browser window wrapping an alert:
         AXGroup / AXSubrole=AXApplicationAlertDialog
           AXButton  "Turn off in settings" | "Cancel" | "Allow"
 
-Two things that title alone will not tell you, and which find_dialog_hosts()
-therefore guards against: the same title is also carried by the Window menu's
-AXMenuItem and by an AXHeading inside the dialog, so the role has to match too;
-and Chrome sets no AXIdentifier here, so dedupe keys on position and size.
-`docs/mac/ax_probe.py` re-dumps the tree if a future Chrome moves it.
+Two things that title alone will not tell you: the same title is also carried
+by the Window menu's AXMenuItem and by an AXHeading inside the dialog, so the
+role has to match too - though find_dialog_hosts() only ever reads a Chrome
+process's AXWindows and their AXSheets, so neither is actually reachable; the
+role check is defense in depth, not the only thing standing between it and a
+false positive. That scope is also the perf fix: earlier builds walked every
+AXChild up to twelve levels deep, which on a loaded page means the page's own
+AX-exposed DOM, on every single poll (confirmed at ~150-160ms/pid via
+--diagnostics). The dialog only ever lives two AX reads from the app root, so
+that's all this looks at now. And Chrome sets no AXIdentifier here, so dedupe
+keys on position and size. `docs/mac/ax_probe.py` re-dumps the tree if a
+future Chrome moves it.
 
 Runs standalone:
 
@@ -55,12 +65,28 @@ try:
         kAXValueCGPointType,
         kAXValueCGSizeType,
     )
-    from AppKit import NSWorkspace
+    from AppKit import NSRunningApplication, NSWorkspace
 except ImportError:
     sys.exit(
         "Yes, Dev macOS engine needs pyobjc:\n"
         "    pip3 install pyobjc-framework-Cocoa pyobjc-framework-ApplicationServices"
     )
+
+try:
+    from Quartz import (
+        CGEventCreate,
+        CGEventCreateMouseEvent,
+        CGEventGetLocation,
+        CGEventPost,
+        kCGEventLeftMouseDown,
+        kCGEventLeftMouseUp,
+        kCGEventMouseMoved,
+        kCGHIDEventTap,
+        kCGMouseButtonLeft,
+    )
+    _HAVE_QUARTZ = True
+except ImportError:
+    _HAVE_QUARTZ = False
 
 # Chrome variants. Edge is Chromium too and shows the same dialog; the tray adds
 # it to the bundle set when "Include Microsoft Edge" is on.
@@ -78,7 +104,17 @@ APPROVE_PATTERN = re.compile(r"^(allow|approve)$", re.I)
 POLL_MS_DEFAULT = 250
 DEDUPE_SECONDS = 2.0     # don't re-press one dialog mid-teardown ...
 DEDUPE_MAX = 400         # ... but cap the memory so a long run can't grow forever
-MAX_TREE_DEPTH = 12
+# ponytail: fixed sleep, not AX notification. Bump if Chrome teardown gets slower.
+VERIFY_WAIT_S = 0.5
+
+
+def _button_center(pos: tuple[float, float], size: tuple[float, float]) -> tuple[float, float]:
+    """Return the midpoint of an AX button frame in global top-left points."""
+    return (pos[0] + size[0] / 2.0, pos[1] + size[1] / 2.0)
+
+
+# ponytail: click-point only; live AX/CGEvent needs a real Chrome sheet.
+assert _button_center((3968.0, 657.0), (76.0, 36.0)) == (4006.0, 675.0)
 
 
 def _attr(element, name):
@@ -150,15 +186,17 @@ def _is_visible(element) -> bool:
 class Engine:
     def __init__(self, observe: bool = False, poll_ms: int = POLL_MS_DEFAULT,
                  include_edge: bool = False, log_path: Path = LOG_PATH,
-                 exit_with_parent: bool = False) -> None:
+                 exit_with_parent: bool = False, diagnostics: bool = False) -> None:
         self.observe = observe
         self.poll_s = max(0.05, poll_ms / 1000.0)
         self.bundles = CHROME_BUNDLES + (EDGE_BUNDLES if include_edge else ())
         self.log_path = Path(log_path)
         self.approved = 0
         self.exit_with_parent = exit_with_parent
+        self.diagnostics = diagnostics
         self._parent_pid = os.getppid()
         self._seen: dict[str, float] = {}    # dedupe key -> last-press wall clock
+        self._next_diagnostic_at = 0.0
 
     # -------- logging: byte-for-byte the format the tray parses --------
 
@@ -179,39 +217,62 @@ class Engine:
 
     # -------- finding Chrome, the dialog, and the button --------
 
-    def chrome_pids(self) -> list[int]:
+    def workspace_chrome_pids(self) -> list[int]:
+        """Read NSWorkspace's application list for diagnostic comparison."""
         out = []
         for app in NSWorkspace.sharedWorkspace().runningApplications():
             if (app.bundleIdentifier() or "") in self.bundles:
                 out.append(app.processIdentifier())
         return out
 
-    def find_dialog_hosts(self, app_element, depth: int = 0, hits=None, seen=None) -> list:
-        """Collect elements whose title matches the dialog, scanning windows and
-        their sheets/children. Bounded depth so a pathological tree can't hang the
-        sweep.
+    def chrome_pids(self) -> list[int]:
+        """Query each bundle directly, bypassing NSWorkspace's stale app list."""
+        out = []
+        for bundle in self.bundles:
+            apps = NSRunningApplication.runningApplicationsWithBundleIdentifier_(bundle)
+            out.extend(app.processIdentifier() for app in apps)
+        return out
 
-        The probe confirmed the dialog's shape on Chrome 152: an AXSheet titled
-        'Allow remote debugging?' on the browser window, wrapping an
-        AXGroup/AXApplicationAlertDialog with the Allow button. Because _children
-        walks AXChildren, AXSheets and AXWindows, one on-screen dialog surfaces
-        through several paths (the probe saw four refs for one alert); dedupe by
-        geometry signature so each real dialog is returned once."""
-        if hits is None:
-            hits, seen = [], set()
-        if depth > MAX_TREE_DEPTH:
-            return hits
-        title = _attr(app_element, "AXTitle") or _attr(app_element, "AXDescription") or ""
-        if DIALOG_PATTERN.match(str(title).strip()) and _is_dialog_role(app_element):
-            sig = self._host_signature(app_element)
-            if sig not in seen:
-                seen.add(sig)
-                hits.append(app_element)
-            # don't descend into a matched dialog; its buttons are found separately
-            return hits
-        for child in _children(app_element):
-            self.find_dialog_hosts(child, depth + 1, hits, seen)
+    def find_dialog_hosts(self, app_element, diag: list[str] | None = None) -> list:
+        """Collect elements whose title matches the dialog.
+
+        The dialog is an AXSheet titled 'Allow remote debugging?' one level
+        below a browser AXWindow - confirmed on Chrome 152, but *which*
+        attribute exposes it there is not stable. A live probe against a real
+        prompt found window.AXSheets returning fourteen entries, every one a
+        stale/invalid ref (AXError -25202), while the actual sheet showed up
+        as a plain entry in window.AXChildren instead. So both are checked,
+        one level deep, no further - which is still nothing like the old
+        depth-12 recursive walk (~150-160ms/pid, see --diagnostics): a
+        window's AXChildren here is a handful of top-level regions (toolbar,
+        tab strip, the sheet if any, the web area), not the page's own
+        AX-exposed DOM, which only appears if you recurse *into* the web-area
+        child - and this doesn't."""
+        hits: list = []
+        seen: set = set()
+        windows = _attr(app_element, "AXWindows") or []
+        if diag is not None:
+            diag.append(f"windows={len(windows)}")
+        for window in windows:
+            title = _attr(window, "AXTitle") or ""
+            if DIALOG_PATTERN.match(str(title).strip()) and _is_dialog_role(window):
+                self._add_host(window, hits, seen)
+            candidates = (_attr(window, "AXSheets") or []) + (_attr(window, "AXChildren") or [])
+            if diag is not None:
+                diag.append(f"candidates={len(candidates)}")
+            for candidate in candidates:
+                title = _attr(candidate, "AXTitle") or _attr(candidate, "AXDescription") or ""
+                if DIALOG_PATTERN.match(str(title).strip()) and _is_dialog_role(candidate):
+                    self._add_host(candidate, hits, seen)
         return hits
+
+    def _add_host(self, host, hits: list, seen: set) -> None:
+        """Append host if its geometry signature hasn't already surfaced this
+        sweep - a window and its sheet can't collide, but stay defensive."""
+        sig = self._host_signature(host)
+        if sig not in seen:
+            seen.add(sig)
+            hits.append(host)
 
     def find_approve_button(self, host, depth: int = 0):
         """The Allow button within one dialog subtree. Scoped to the dialog, never
@@ -262,7 +323,7 @@ class Engine:
     _dedupe_key = _host_signature
 
     def _press(self, button) -> str | None:
-        """AXPress the button. Returns the action name on success, None on failure."""
+        """AXPress the button. Returns the action name on AX success, not Chrome accept."""
         try:
             err = AXUIElementPerformAction(button, "AXPress")
             if err == kAXErrorSuccess:
@@ -271,13 +332,119 @@ class Engine:
             pass
         return None
 
+    def _raise_host(self, host) -> None:
+        """Best-effort AXRaise on the sheet and its parent window so the click lands."""
+        try:
+            AXUIElementPerformAction(host, "AXRaise")
+        except Exception:
+            pass
+        parent = _attr(host, "AXParent")
+        if parent is None:
+            return
+        try:
+            AXUIElementPerformAction(parent, "AXRaise")
+        except Exception:
+            pass
+
+    def _sheet_still_up(self, app, key: str) -> bool:
+        """Return True when the same dialog signature is still visible with buttons."""
+        for host in self.find_dialog_hosts(app):
+            if not _is_visible(host):
+                continue
+            if not [label for label in self._button_labels(host) if label]:
+                continue
+            if self._host_signature(host) == key:
+                return True
+        return False
+
+    def _hw_click(self, x: float, y: float) -> bool:
+        """Left-click global point (x, y), then put the cursor back. Returns False if Quartz is missing."""
+        if not _HAVE_QUARTZ:
+            return False
+        try:
+            cursor = CGEventCreate(None)
+            origin = CGEventGetLocation(cursor) if cursor else None
+            point = (x, y)
+            move = CGEventCreateMouseEvent(None, kCGEventMouseMoved, point, kCGMouseButtonLeft)
+            down = CGEventCreateMouseEvent(None, kCGEventLeftMouseDown, point, kCGMouseButtonLeft)
+            up = CGEventCreateMouseEvent(None, kCGEventLeftMouseUp, point, kCGMouseButtonLeft)
+            CGEventPost(kCGHIDEventTap, move)
+            time.sleep(0.03)
+            CGEventPost(kCGHIDEventTap, down)
+            time.sleep(0.03)
+            CGEventPost(kCGHIDEventTap, up)
+            if origin is not None:
+                back = CGEventCreateMouseEvent(None, kCGEventMouseMoved, origin, kCGMouseButtonLeft)
+                CGEventPost(kCGHIDEventTap, back)
+            return True
+        except Exception:
+            return False
+
+    def _approve(self, app, host, button, key: str) -> str | None:
+        """Dismiss the consent sheet. Returns how it fell only after the sheet is gone."""
+        self._raise_host(host)
+        ax_ok = self._press(button) is not None
+        time.sleep(VERIFY_WAIT_S)
+        if not self._sheet_still_up(app, key):
+            return "AXPress" if ax_ok else "AXRaise"
+
+        pos = _ax_point(button)
+        size = _ax_size(button)
+        if pos is None or size is None:
+            return None
+        x, y = _button_center(pos, size)
+        self.log(f"  AXPress left sheet up; CGEvent click at ({x:.1f}, {y:.1f})", "AUDIT")
+        if not self._hw_click(x, y):
+            return None
+        time.sleep(VERIFY_WAIT_S)
+        if not self._sheet_still_up(app, key):
+            return "CGEvent"
+        return None
+
+    def _element_summary(self, element) -> str:
+        """Return the AX identity and geometry used to audit a pending click."""
+        attributes = {
+            "title": _attr(element, "AXTitle"),
+            "description": _attr(element, "AXDescription"),
+            "role": _attr(element, "AXRole"),
+            "subrole": _attr(element, "AXSubrole"),
+            "identifier": _attr(element, "AXIdentifier"),
+            "enabled": _attr(element, "AXEnabled"),
+            "position": _ax_point(element),
+            "size": _ax_size(element),
+        }
+        return " ".join(f"{key}={value!r}" for key, value in attributes.items())
+
     # -------- one sweep, and the loop --------
 
     def sweep(self) -> None:
         now = time.time()
-        for pid in self.chrome_pids():
+        is_diagnostic_sweep = self.diagnostics and now >= self._next_diagnostic_at
+        if is_diagnostic_sweep:
+            self._next_diagnostic_at = now + 5
+            self.log(f"diagnostic sweep start trusted={is_trusted(prompt=False)} "
+                     f"parent={os.getppid()} expected_parent={self._parent_pid}", "DIAG")
+
+        direct_started = time.monotonic()
+        chrome_pids = self.chrome_pids()
+        if is_diagnostic_sweep:
+            direct_ms = int((time.monotonic() - direct_started) * 1000)
+            workspace_started = time.monotonic()
+            workspace_pids = self.workspace_chrome_pids()
+            workspace_ms = int((time.monotonic() - workspace_started) * 1000)
+            self.log(f"diagnostic pids direct={chrome_pids} ({direct_ms}ms) "
+                     f"workspace={workspace_pids} ({workspace_ms}ms)", "DIAG")
+
+        for pid in chrome_pids:
             app = AXUIElementCreateApplication(pid)
-            for host in self.find_dialog_hosts(app):
+            scan_started = time.monotonic()
+            diag: list[str] = [] if is_diagnostic_sweep else None
+            hosts = self.find_dialog_hosts(app, diag=diag)
+            if is_diagnostic_sweep:
+                scan_ms = int((time.monotonic() - scan_started) * 1000)
+                self.log(f"diagnostic AX pid={pid} hosts={len(hosts)} "
+                         f"({scan_ms}ms) {' '.join(diag)}", "DIAG")
+            for host in hosts:
                 try:
                     if not _is_visible(host):
                         continue
@@ -309,16 +476,18 @@ class Engine:
                         self.log(f"  no button matched /{APPROVE_PATTERN.pattern}/ - left alone", "WARN")
                         continue
 
-                    how = self._press(button)
+                    self.log(f"approval pending host={key} siblings={labels!r} "
+                             f"target={self._element_summary(button)}", "AUDIT")
+                    how = self._approve(app, host, button, key)
                     if how:
                         self.approved += 1
                         self.log(f"  APPROVED via {how}", "ACTION")
                         self.log(f"  total approved this session: {self.approved}")
                     else:
-                        # Drop the dedupe entry so a failed press is retried on the
-                        # next sweep instead of sitting out the window.
+                        # Drop the dedupe entry so a leftover sheet is retried
+                        # on the next sweep instead of sitting out the window.
                         self._seen.pop(key, None)
-                        self.log("  FAILED to invoke Allow button", "ERROR")
+                        self.log("  FAILED: sheet still up after AXPress/CGEvent", "ERROR")
                 except Exception as exc:
                     self.log(f"  host error: {exc!r}", "ERROR")
 
@@ -326,6 +495,8 @@ class Engine:
         if len(self._seen) > DEDUPE_MAX:
             cutoff = now - 300
             self._seen = {k: v for k, v in self._seen.items() if v >= cutoff}
+        if is_diagnostic_sweep:
+            self.log("diagnostic sweep complete", "DIAG")
 
     def run(self) -> int:
         if not is_trusted(prompt=False):
@@ -365,11 +536,14 @@ def main(argv=None) -> int:
                     help="stop as soon as the launching process goes away; the "
                          "tray passes this so a dead tray cannot leave an engine "
                          "approving prompts unsupervised")
+    ap.add_argument("--diagnostics", action="store_true",
+                    help="log trust, process discovery, and AX sweep timing every 5s")
     args = ap.parse_args(argv)
 
     engine = Engine(observe=args.observe, poll_ms=args.interval_ms,
                     include_edge=args.include_edge, log_path=Path(args.log_path),
-                    exit_with_parent=args.exit_with_parent)
+                    exit_with_parent=args.exit_with_parent,
+                    diagnostics=args.diagnostics)
     if args.once:
         if not is_trusted():
             engine.log("NOT trusted for Accessibility - results will be empty.", "ERROR")
