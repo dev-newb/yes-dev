@@ -1,7 +1,10 @@
-# Yes, Dev
+<p align="center">
+  <img src="docs/logo.svg" alt="Yes, Dev" width="460">
+</p>
 
-A tray app that clicks Chrome's **"Allow remote debugging?"** prompt for you.
-Windows and macOS.
+<p align="center">
+  A tray app that clicks Chrome's <b>"Allow remote debugging?"</b> prompt for you. Windows and macOS.
+</p>
 
 Chrome 144+ asks for consent every single time a client attaches to the remote
 debugging endpoint. If you drive Chrome with more than one agent or automation
