@@ -1,9 +1,14 @@
-# Yes, Dev 1.1.0
+# Changelog
+
+Newest first. Each entry says what changed and, where it matters, what was
+measured - the numbers are from this repo's own runs, not estimates.
+
+## 1.1.0
 
 Two headline changes: **macOS support**, and a **critical memory fix for
 Windows**. If you run the Windows build, this update is not optional.
 
-## Windows: the engine leaked, and could outlive its tray
+### Windows: the engine leaked, and could outlive its tray
 
 The 1.0.0 engine walked the UI Automation tree on every sweep - four times a
 second - to look for a dialog that is almost never there. UI Automation elements
@@ -49,7 +54,7 @@ alone stops the engine within 1.5 seconds.
 If you are updating from 1.0.0, `git pull` and restart the tray. Nothing in your
 config changes.
 
-## macOS support
+### macOS support
 
 The full port: an Accessibility-API engine, an `NSWindow` cloud overlay, a
 status-bar tray, and a LaunchAgent for start-at-login. Verified on real hardware
@@ -61,7 +66,7 @@ README's Known limitations section says so plainly, including that the
 Accessibility grant attaches to your Python binary until a signed `.app` bundle
 exists.
 
-## Also
+### Also
 
 - The Windows status icon is the app's own cloud with a white check, from the
   same seed as the macOS one, so both platforms wear one silhouette and only the
@@ -70,9 +75,7 @@ exists.
 - One `requirements.txt` for both platforms, with markers.
 - A logo, and documentation art generated from the app's own renderer.
 
----
-
-# Yes, Dev 1.0.0
+## 1.0.0
 
 First release.
 
@@ -86,7 +89,7 @@ clicks it for you.
 Four parallel attaches go from ~35 seconds of waiting on a human to 2.4-4.4
 seconds, unattended.
 
-## What's in it
+### What's in it
 
 - **Clicks the consent dialog** through UI Automation - no mouse movement, no
   focus stealing, works on background windows while you carry on typing.
@@ -106,18 +109,18 @@ seconds, unattended.
 - Optional Microsoft Edge support, adjustable poll rate, and an approval counter
   in the tray tooltip.
 
-## Field data
+### Field data
 
 From 8 days on the machine it was built on: 454 approvals, one failed click
 (99.8%), no burst pauses at the default limit, and it restarted itself correctly
 after a reboot. Twenty-one transient UI Automation errors were logged and
 recovered from on the next 250ms sweep, costing nothing observable.
 
-## Requirements
+### Requirements
 
 Windows, Chrome 144+, Python 3.9+ with `pystray` and `pillow`.
 
-## Known limitations
+### Known limitations
 
 English-language Chrome only (the dialog and button are matched by their text,
 though both are overridable on `watcher.ps1`); the clouds are positioned for a

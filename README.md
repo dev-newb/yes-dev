@@ -41,7 +41,8 @@ the macOS build is newer and is described honestly under
 > unattended for five days.
 >
 > Both are fixed in **[1.1.0](https://github.com/dev-newb/yes-dev/releases/tag/v1.1.0)**.
-> If you are on 1.0.0, `git pull` and restart the tray.
+> If you are on 1.0.0, `git pull` and restart the tray. Full detail, with the
+> before and after measurements, is in the [changelog](CHANGELOG.md).
 
 ## Why not just turn the prompt off?
 
