@@ -26,6 +26,23 @@ after a reboot. That figure is from the Windows build, which has the mileage;
 the macOS build is newer and is described honestly under
 [Known limitations](#known-limitations).
 
+> ### Windows: update if you are running 1.0.0
+>
+> The 1.0.0 engine leaked memory, and badly. It walked the UI Automation tree
+> four times a second whether or not a prompt was there, and those elements hold
+> **native** memory that puts no pressure on the managed heap - so .NET never
+> collected, and nothing was ever released. Measured at ~9 MB/min, about 13 GB a
+> day. It was found in the field at **51.5 GB** private after ten days, with
+> Windows compressing 11.8 GB to cope.
+>
+> The same build also let the engine outlive its tray. The burst guard and the
+> disarm timer both live in the tray, so an orphaned engine keeps approving
+> prompts with nothing watching the rate - the 51.5 GB one had been running
+> unattended for five days.
+>
+> Both are fixed in **[1.1.0](https://github.com/dev-newb/yes-dev/releases/tag/v1.1.0)**.
+> If you are on 1.0.0, `git pull` and restart the tray.
+
 ## Why not just turn the prompt off?
 
 You can't, and this is not a gap waiting to be filled. There's no flag, no
