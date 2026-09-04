@@ -11,6 +11,7 @@ from __future__ import annotations
 import ctypes
 import json
 import os
+import random
 import subprocess
 import sys
 import threading
@@ -21,6 +22,8 @@ from pathlib import Path
 
 import pystray
 from PIL import Image, ImageDraw
+
+import puffs        # the cloud artwork; the status icon is the app's own cloud
 
 APP_NAME = "Yes, Dev"
 APP_SLUG = "yes-dev"
@@ -39,6 +42,12 @@ STARTUP_LNK = (
 )
 
 CREATE_NO_WINDOW = 0x08000000
+
+ICON_PX = 128        # drawn large; Windows scales it down for the notification area
+ICON_SEED = 7        # one silhouette for every state - matches the macOS build, so
+                     # both platforms wear the same cloud. Only the colour changes.
+CHECK_SCALE = 1.34   # the check is oversized on purpose; this small, a thin one
+                     # turns to mush
 
 DEFAULTS = {
     "enabled": True,
@@ -163,6 +172,9 @@ class YesDev:
             "-IntervalMs", str(self.cfg["poll_ms"]),
             "-LogPath", str(LOG_PATH),
             "-BrowserProcess", browsers,
+            # So the engine dies with us: it must never be left approving
+            # prompts with no tray watching the rate.
+            "-ParentPid", str(os.getpid()),
         ]
         if self.cfg["observe_only"]:
             args.append("-Observe")
@@ -349,13 +361,42 @@ class YesDev:
         return (46, 160, 67)              # green
 
     def make_image(self) -> Image.Image:
-        size = 64
-        img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
-        d = ImageDraw.Draw(img)
-        d.ellipse([2, 2, size - 2, size - 2], fill=self.color())
-        # Checkmark: it says yes.
-        d.line([(18, 33), (28, 44), (46, 20)], fill=(255, 255, 255, 255), width=8, joint="curve")
-        return img
+        """The app's own cloud in the state colour, with a white check in front.
+
+        The same silhouette as the macOS status icon - same seed - but the right
+        way up. On Windows the clouds rise from the tray; on macOS they hang from
+        the menu bar, so that build flips it. A plain circle read as an anonymous
+        dot among the notification-area icons, where the silhouette is the only
+        thing that says which app this is.
+        """
+        # Seeded: _render_cloud jitters its lobes per call, and an icon that
+        # changed shape whenever it changed colour would look like a different app.
+        random.seed(ICON_SEED)
+        mask = puffs._render_cloud(ICON_PX, premultiply=False).split()[3]
+
+        art = Image.new("RGBA", mask.size, (0, 0, 0, 0))
+        body = Image.new("RGBA", mask.size, self.color() + (255,))
+        body.putalpha(mask)
+        art.alpha_composite(body)
+
+        # Upright, the cloud's mass sits below its centre line, so the check goes
+        # with it rather than floating in the lobes.
+        w, h = mask.size
+        cx, cy = w / 2, h * 0.60
+        s = w * 0.0092 * CHECK_SCALE
+        ImageDraw.Draw(art).line(
+            [(cx - 13 * s, cy + 0.5 * s), (cx - 4.5 * s, cy + 9.5 * s),
+             (cx + 13.5 * s, cy - 10 * s)],
+            fill=(255, 255, 255, 255), width=max(1, int(5.6 * s)), joint="curve")
+
+        # _render_cloud leaves ~15% margins for its blur. Keeping them would pay
+        # for empty space in an icon that is only a few pixels tall on screen, so
+        # crop to the art and centre it in the square the tray expects.
+        art = art.crop(art.getbbox())
+        side = max(art.size)
+        square = Image.new("RGBA", (side, side), (0, 0, 0, 0))
+        square.alpha_composite(art, ((side - art.width) // 2, (side - art.height) // 2))
+        return square
 
     def notify(self, message: str) -> None:
         if self.icon is None:
