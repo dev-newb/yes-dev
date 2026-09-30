@@ -746,13 +746,16 @@ class Engine:
                     # its predecessor goes and shares this key, so the clock
                     # is reset on each verified approval below.
                     if not self.observe:
+                        # Stamped here, not from the sweep's `now`: the AX walk
+                        # above can take 100ms or more, and the guard is
+                        # measured from when the sheet was actually seen.
                         first = self._first_seen.get(key)
                         if first is None:
-                            self._first_seen[key] = now
+                            self._first_seen[key] = time.time()
                             self.log(f"  sheet first seen key={key} - pressing once the "
                                      f"activation guard has passed", "AUDIT")
                             continue
-                        if now - first < ACTIVATION_GUARD_S:
+                        if time.time() - first < ACTIVATION_GUARD_S:
                             continue
                     last = self._seen.get(key)
                     if last is not None and now - last < DEDUPE_SECONDS:
