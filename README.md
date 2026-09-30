@@ -21,8 +21,10 @@ consent dialogs, the native Windows fallback, and approval counting and logging.
 Validation includes **143 passing checks**, **32 simultaneous browser connections**,
 and two 30-minute runs with **480 successful connections and 480 saved counter
 events**. See the [test report and memory measurements](docs/testing/windows-validation-2026-09-30.md).
-The macOS code is unchanged; the separate macOS Chrome 153 fix in
-[#4](https://github.com/dev-newb/yes-dev/pull/4) is not included.
+The **v1.2.1 download** does not include the later macOS changes from
+[#4](https://github.com/dev-newb/yes-dev/pull/4) and
+[#6](https://github.com/dev-newb/yes-dev/pull/6). Those changes are now on `main`;
+see [Unreleased in the changelog](CHANGELOG.md#unreleased).
 
 Measured on Chrome 151: four parallel attaches went from ~35 seconds of waiting
 on a human to **2.4-4.4 seconds**, unattended.

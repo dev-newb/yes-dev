@@ -3,49 +3,7 @@
 Newest first. Each entry says what changed and, where it matters, what was
 measured - the numbers are from this repo's own runs, not estimates.
 
-## 1.2.1 - 2026-09-30
-
-### Windows: browser matching, native fallback, and reliable counts
-
-- Fix process-name parsing when **Include Microsoft Edge** is enabled. Chrome
-  and Edge are now matched separately instead of as one comma-separated name.
-- Support English and Simplified Chinese consent dialogs, including the distinct
-  Chrome 154 and Edge Chinese titles.
-- Replace the unavailable managed `LegacyIAccessiblePattern` type with the native
-  COM interface. The fallback checks the original button identity, process and
-  dialog before acting. It does not move the mouse or change focus.
-- Count each completed dialog once across retries and queued prompts that reuse
-  a window handle. Keep the confirmation pending until its log event is saved.
-- Preserve complete counter events across partial reads, log replacement and
-  concurrent reading. Use shared append access, bounded write retries and safe
-  rotation. A console failure cannot duplicate a saved event.
-
-### Validation
-
-All **143 checks** passed. Four-way browser tests completed **32 connections**
-across Chrome and Edge, English and zh-CN, using normal and forced-fallback modes.
-Both 30-minute full-process memory runs passed their preset limits: **480
-connections and 480 saved counter events**, with no failures or watcher restarts.
-
-Sampled private-memory peaks were **83.86 MiB** for normal invocation and
-**86.82 MiB** for the fallback. Active post-warm-up median growth was 2.81 MiB
-and 3.24 MiB. These finite runs do not establish indefinite stability. See the
-[validation report and raw samples](docs/testing/windows-validation-2026-09-30.md).
-
-### Updating and scope
-
-This is a source release. On Windows, exit the tray app, update the source and
-requirements, and restart it. Existing settings stay in `%LOCALAPPDATA%\YesDev`.
-The macOS code is unchanged. The separate macOS Chrome 153 work in
-[#4](https://github.com/dev-newb/yes-dev/pull/4) is not included.
-
-### Thanks
-
-Thanks to [@Icather](https://github.com/Icather) (ChengLong Han) for identifying
-these Windows issues, providing clear reproductions, and contributing the fixes in
-[#2](https://github.com/dev-newb/yes-dev/pull/2) and
-[#3](https://github.com/dev-newb/yes-dev/pull/3). This update builds on that work
-with further fixes and testing. The original commits are preserved in its history.
+## Unreleased
 
 ### macOS
 
@@ -144,6 +102,51 @@ label, heading and accept decision; the `AXPress` error code; and the liveness
 and visibility of both references after each attempt. The false approvals above
 were indistinguishable from real ones in the old log, which is why they survived
 two releases.
+
+## 1.2.1 - 2026-09-30
+
+### Windows: browser matching, native fallback, and reliable counts
+
+- Fix process-name parsing when **Include Microsoft Edge** is enabled. Chrome
+  and Edge are now matched separately instead of as one comma-separated name.
+- Support English and Simplified Chinese consent dialogs, including the distinct
+  Chrome 154 and Edge Chinese titles.
+- Replace the unavailable managed `LegacyIAccessiblePattern` type with the native
+  COM interface. The fallback checks the original button identity, process and
+  dialog before acting. It does not move the mouse or change focus.
+- Count each completed dialog once across retries and queued prompts that reuse
+  a window handle. Keep the confirmation pending until its log event is saved.
+- Preserve complete counter events across partial reads, log replacement and
+  concurrent reading. Use shared append access, bounded write retries and safe
+  rotation. A console failure cannot duplicate a saved event.
+
+### Validation
+
+All **143 checks** passed. Four-way browser tests completed **32 connections**
+across Chrome and Edge, English and zh-CN, using normal and forced-fallback modes.
+Both 30-minute full-process memory runs passed their preset limits: **480
+connections and 480 saved counter events**, with no failures or watcher restarts.
+
+Sampled private-memory peaks were **83.86 MiB** for normal invocation and
+**86.82 MiB** for the fallback. Active post-warm-up median growth was 2.81 MiB
+and 3.24 MiB. These finite runs do not establish indefinite stability. See the
+[validation report and raw samples](docs/testing/windows-validation-2026-09-30.md).
+
+### Updating and scope
+
+This is a source release. On Windows, exit the tray app, update the source and
+requirements, and restart it. Existing settings stay in `%LOCALAPPDATA%\YesDev`.
+The published v1.2.1 tag contains the Windows fixes only; its macOS code is
+unchanged. The later macOS changes from [#4](https://github.com/dev-newb/yes-dev/pull/4)
+and [#6](https://github.com/dev-newb/yes-dev/pull/6) are on `main` under Unreleased.
+
+### Thanks
+
+Thanks to [@Icather](https://github.com/Icather) (ChengLong Han) for identifying
+these Windows issues, providing clear reproductions, and contributing the fixes in
+[#2](https://github.com/dev-newb/yes-dev/pull/2) and
+[#3](https://github.com/dev-newb/yes-dev/pull/3). This update builds on that work
+with further fixes and testing. The original commits are preserved in its history.
 
 ## 1.2.0
 
