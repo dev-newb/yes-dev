@@ -3,6 +3,20 @@
 Newest first. Each entry says what changed and, where it matters, what was
 measured - the numbers are from this repo's own runs, not estimates.
 
+## Unreleased
+
+### Windows
+
+Fix Chrome and Edge process detection, add Simplified Chinese consent-dialog
+support, and improve the native approval fallback, counters, and log handling.
+See [#5](https://github.com/dev-newb/yes-dev/pull/5) for the changes and test results.
+
+Thanks to [@crimsonsunset](https://github.com/crimsonsunset) for identifying these
+Windows issues, providing clear reproductions, and contributing the fixes in
+[#2](https://github.com/dev-newb/yes-dev/pull/2) and
+[#3](https://github.com/dev-newb/yes-dev/pull/3). This update builds on that work
+with further fixes and testing. The original commits are preserved in its history.
+
 ## 1.2.0
 
 The macOS engine, hardened against real load. Most of this began as a pull
