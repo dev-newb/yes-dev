@@ -40,6 +40,15 @@ required again, for keyboard events only.
 A sheet that survives both is logged `FAILED` and retried next sweep, as before.
 There is still no synthetic mouse click anywhere in the engine.
 
+Every keystroke is gated on the pressed sheet still being the same live node:
+the references are re-read before the focus write, before each Tab and
+immediately before Space, which must also still find Allow focused. An `AXPress`
+that takes effect late - slow teardown under load, seen twice in the 1.2.0 runs -
+would otherwise reach the keyboard path with the sheet already gone, walk Tabs
+into whatever Chrome focuses next, and log a real approval as `FAILED`, which the
+burst guard never counts. It is now reported as the approval it was, with no key
+sent. A sheet that stops answering gets no key either, and is retried next sweep.
+
 ### macOS: the log says which decision was made
 
 Every approval path now leaves a trail: each dialog-role candidate with its
