@@ -33,9 +33,18 @@ focus moves onto Allow; `Space` then goes to Chrome's pid via
 `CGEventPostToPid`, which delivers keyboard events even though it silently drops
 mouse events. Nine of nine approvals landed on Chrome 153.0.8010.48, each
 verified by a websocket reaching `OPEN` rather than by the sheet vanishing, at
-about 1.0 s from prompt to approval. The pointer does not move and Chrome is
-never activated, so the 1.2.0 promises still hold. `pyobjc-framework-Quartz` is
-required again, for keyboard events only.
+about 1.0 s from prompt to approval. The pointer does not move and the engine
+never activates Chrome. `pyobjc-framework-Quartz` is required again, for
+keyboard events only.
+
+One promise the engine cannot keep on Chrome's behalf: Chrome activates its own
+window when it shows this prompt. `DevToolsConnectionDialog` calls
+`browser->GetWindow()->Activate()` before the sheet is built, unconditionally,
+so the frontmost app becomes Chrome the moment a client connects, before the
+engine has seen anything. WindowServer's own log confirms it on every run, on
+the AXPress path and the keystroke path alike. The engine adds no activation
+of its own; the approval, by either route, leaves the frontmost app as it found
+it.
 
 A sheet that survives both is logged `FAILED` and retried next sweep, as before.
 There is still no synthetic mouse click anywhere in the engine.
