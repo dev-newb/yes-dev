@@ -1,0 +1,206 @@
+{
+  "date": "2026-09-30",
+  "validated_code_commit": "618001d29d3ebf8ee8f16799a792259308ab14eb",
+  "watcher_git_blob": "7bf617076daae4221e4537831fc963151b5f580b",
+  "watcher_windows_checkout_sha256": "14b710bc58adafdd91b3739d934436e6cb0db99c06d1165eb728b9d86f22d88f",
+  "suite": {
+    "passed": 143,
+    "failed": 0,
+    "groups": {
+      "watcher_logic": 32,
+      "argument_binding": 3,
+      "tray_launch": 4,
+      "tray_log": 65,
+      "log_writer": 6,
+      "observer": 3,
+      "native_controls": 22,
+      "browser_cases": 8
+    }
+  },
+  "browser_cases": [
+    {
+      "browser": "Chrome",
+      "language": "en-US",
+      "mode": "normal",
+      "product": "Chrome/154.0.8037.58",
+      "connections": 4,
+      "counter_events": 4,
+      "fallback_attempts": 0
+    },
+    {
+      "browser": "Chrome",
+      "language": "en-US",
+      "mode": "forced-fallback",
+      "product": "Chrome/154.0.8037.58",
+      "connections": 4,
+      "counter_events": 4,
+      "fallback_attempts": 14
+    },
+    {
+      "browser": "Chrome",
+      "language": "zh-CN",
+      "mode": "normal",
+      "product": "Chrome/154.0.8037.58",
+      "connections": 4,
+      "counter_events": 4,
+      "fallback_attempts": 0
+    },
+    {
+      "browser": "Chrome",
+      "language": "zh-CN",
+      "mode": "forced-fallback",
+      "product": "Chrome/154.0.8037.58",
+      "connections": 4,
+      "counter_events": 4,
+      "fallback_attempts": 14
+    },
+    {
+      "browser": "Edge",
+      "language": "en-US",
+      "mode": "normal",
+      "product": "Edg/154.0.4258.37",
+      "connections": 4,
+      "counter_events": 4,
+      "fallback_attempts": 0
+    },
+    {
+      "browser": "Edge",
+      "language": "en-US",
+      "mode": "forced-fallback",
+      "product": "Edg/154.0.4258.37",
+      "connections": 4,
+      "counter_events": 4,
+      "fallback_attempts": 4
+    },
+    {
+      "browser": "Edge",
+      "language": "zh-CN",
+      "mode": "normal",
+      "product": "Edg/154.0.4258.37",
+      "connections": 4,
+      "counter_events": 4,
+      "fallback_attempts": 0
+    },
+    {
+      "browser": "Edge",
+      "language": "zh-CN",
+      "mode": "forced-fallback",
+      "product": "Edg/154.0.4258.37",
+      "connections": 4,
+      "counter_events": 4,
+      "fallback_attempts": 4
+    }
+  ],
+  "memory_soaks": {
+    "normal": {
+      "analysis": {
+        "mode": "normal",
+        "source_sha256": "14b710bc58adafdd91b3739d934436e6cb0db99c06d1165eb728b9d86f22d88f",
+        "checks": {
+          "completed_requested_duration": true,
+          "at_least_30_minutes": true,
+          "no_failed_connections": true,
+          "one_count_per_connection": true,
+          "persisted_events_match_connections": true,
+          "at_least_100_connections": true,
+          "same_watcher_process": true,
+          "below_400_mib_ceiling": true,
+          "no_idle_approvals": true,
+          "idle_memory_and_handles": true,
+          "active_memory_and_handles": true
+        },
+        "passed": true,
+        "phases": {
+          "idle": {
+            "samples": 59,
+            "private_start_mib": 78.3203125,
+            "private_end_mib": 78.44921875,
+            "private_growth_mib": 0.12890625,
+            "private_slope_mib_per_minute": 0.05033141860911018,
+            "handle_growth": 0.0,
+            "passed": true
+          },
+          "active": {
+            "samples": 177,
+            "private_start_mib": 80.9453125,
+            "private_end_mib": 83.7578125,
+            "private_growth_mib": 2.8125,
+            "private_slope_mib_per_minute": 0.20894094194529678,
+            "handle_growth": 2.0,
+            "passed": true
+          }
+        },
+        "peak_private_mib": 83.85546875,
+        "peak_working_set_mib": 104.3515625,
+        "successful_connections": 240,
+        "counted_dialogs": 240,
+        "persisted_action_events": 240,
+        "limits": {
+          "private_growth_mib": 16,
+          "private_slope_mib_per_minute": 0.5,
+          "handle_growth": 64
+        }
+      },
+      "requested_seconds": 1800,
+      "observed_seconds": 1800.052,
+      "idle_seconds": 600,
+      "failed_connections": 0
+    },
+    "fallback": {
+      "analysis": {
+        "mode": "forced-fallback",
+        "source_sha256": "14b710bc58adafdd91b3739d934436e6cb0db99c06d1165eb728b9d86f22d88f",
+        "checks": {
+          "completed_requested_duration": true,
+          "at_least_30_minutes": true,
+          "no_failed_connections": true,
+          "one_count_per_connection": true,
+          "persisted_events_match_connections": true,
+          "at_least_100_connections": true,
+          "same_watcher_process": true,
+          "below_400_mib_ceiling": true,
+          "no_idle_approvals": true,
+          "idle_memory_and_handles": true,
+          "active_memory_and_handles": true
+        },
+        "passed": true,
+        "phases": {
+          "idle": {
+            "samples": 59,
+            "private_start_mib": 78.52734375,
+            "private_end_mib": 78.62890625,
+            "private_growth_mib": 0.1015625,
+            "private_slope_mib_per_minute": 0.030958344298203377,
+            "handle_growth": 0.0,
+            "passed": true
+          },
+          "active": {
+            "samples": 177,
+            "private_start_mib": 83.48046875,
+            "private_end_mib": 86.71875,
+            "private_growth_mib": 3.23828125,
+            "private_slope_mib_per_minute": 0.24474774777927275,
+            "handle_growth": 7.0,
+            "passed": true
+          }
+        },
+        "peak_private_mib": 86.81640625,
+        "peak_working_set_mib": 107.484375,
+        "successful_connections": 240,
+        "counted_dialogs": 240,
+        "persisted_action_events": 240,
+        "limits": {
+          "private_growth_mib": 16,
+          "private_slope_mib_per_minute": 0.5,
+          "handle_growth": 64
+        }
+      },
+      "requested_seconds": 1800,
+      "observed_seconds": 1800.047,
+      "idle_seconds": 600,
+      "failed_connections": 0
+    }
+  },
+  "scope": "Full Windows watcher in separate processes on private desktops; fresh browser profiles. Installed app unchanged.",
+  "limits": "Finite 30-minute runs under this workload. Not proof of indefinite stability. The production counter observes dialog/button dismissal after an action, while tests verify CDP responses independently."
+}
