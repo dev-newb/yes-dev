@@ -37,13 +37,14 @@ public static class YesDevWin {
  }
  public static string Title(IntPtr h) { return Windows.Find(w => w.Handle == h).TitleText; }
  public static uint Pid(IntPtr h) { return Windows.Find(w => w.Handle == h).ProcessId; }
+ public static bool IsWindowVisible(IntPtr h) { var w=Windows.Find(x=>x.Handle==h); return w!=null && w.Visible; }
 }
 public static class FakeAutomation {
  public static object Host;
  public static object FromHandle(IntPtr h) { return Host; }
 }
 '@
-foreach ($name in @('Find-DialogWindows','Approve-Dialog','Invoke-Element')) {
+foreach ($name in @('Find-DialogWindows','Approve-Dialog','Invoke-Element','Complete-PendingApprovals')) {
     $definition = $ast.EndBlock.Statements | Where-Object {
         $_ -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $_.Name -eq $name
     }
@@ -88,7 +89,9 @@ function Set-Browsers([string[]]$Names) {
 }
 function Set-Buttons([string[]]$Names) {
     $script:buttons = @(foreach ($name in $Names) {
-        $button = [pscustomobject]@{Current=[pscustomobject]@{Name=$name}}
+        $script:nextButtonId++
+        $button = [pscustomobject]@{Current=[pscustomobject]@{Name=$name}; RuntimeId=[int[]]@(42,11,$script:nextButtonId)}
+        $button | Add-Member ScriptMethod GetRuntimeId { return ,$this.RuntimeId }
         $button | Add-Member ScriptMethod GetCurrentPattern {
             param($Pattern)
             if ($script:failInvoke -and $Pattern -eq [System.Windows.Automation.InvokePattern]::Pattern) { throw 'Simulated Invoke failure' }
@@ -104,17 +107,24 @@ function Reset-Case {
     $script:WindowClass = $defaults.WindowClass
     Set-Browsers @('chrome')
     $script:Observe = $false; $script:parent = $null; $script:approved = 0
-    $script:lastSeen = @{}; $script:procIds = @(); $script:pidsAt = [datetime]::MinValue
+    $script:lastSeen = @{}; $script:pendingApprovals=@{}; $script:procIds = @(); $script:pidsAt = [datetime]::MinValue
     $script:procIdsWarned = $false; $script:lastTidy = [datetime]::Now
     $script:IntervalMs = 0; $script:processReads = 0
     $script:messages = New-Object System.Collections.ArrayList
     $script:processTable = @{chrome=101; msedge=202}
     $script:clicks = 0; $script:failInvoke = $false; $script:failLegacy = $false
+    $script:nextButtonId=0; $script:closeOnAction=$true; $script:failFindFirst=$false
     $script:action = [pscustomobject]@{}
-    $script:action | Add-Member ScriptMethod Invoke { $script:clicks++ }
-    $script:action | Add-Member ScriptMethod DoDefaultAction { $script:clicks++ }
+    $script:action | Add-Member ScriptMethod Invoke { $script:clicks++; if($script:closeOnAction) {$script:window.Visible=$false} }
+    $script:action | Add-Member ScriptMethod DoDefaultAction { $script:clicks++; if($script:closeOnAction) {$script:window.Visible=$false} }
     $hostObject = [pscustomobject]@{}
     $hostObject | Add-Member ScriptMethod FindAll { param($Scope,$Condition); return $script:buttons }
+    $hostObject | Add-Member ScriptMethod FindFirst {
+        param($Scope,$Condition)
+        if($script:failFindFirst) { throw 'Transient UIA error' }
+        foreach($button in $script:buttons) { if(($button.RuntimeId -join ',') -eq ($Condition.Value -join ',')) { return $button } }
+        return $null
+    }
     [FakeAutomation]::Host = $hostObject
     Set-Buttons @('Turn off in settings','Cancel','Allow')
     [YesDevWin]::Windows.Clear()
@@ -155,9 +165,45 @@ Test-Case 'Both invocation methods fail' { $script:failInvoke=$true; $script:fai
 Test-Case 'Repeated sweep deduplicates' { . $sweep; . $sweep; Assert-Equal $script:clicks 1 'Duplicate click'; Assert-Equal $script:processReads 1 'PID cache' }
 Test-Case 'No dialogs avoids process lookup' { [YesDevWin]::Windows.Clear(); . $sweep; Assert-Equal $script:processReads 0 'Idle process lookup'; Assert-Equal $script:clicks 0 'Idle clicks' }
 Test-Case 'Missing processes warns once' { $script:processTable=@{}; . $sweep; $pidsAt=[datetime]::MinValue; . $sweep; $warnings=@($script:messages | Where-Object {$_ -like 'WARN:browser list*'}).Count; Assert-Equal $warnings ([int]$hasProcessFix) 'Warning count'; Assert-Equal $script:clicks 0 'Missing process clicks' }
-Test-Case 'Warning resets after recovery' { $script:processTable=@{}; . $sweep; $script:processTable=@{chrome=101}; $pidsAt=[datetime]::MinValue; . $sweep; $script:processTable=@{}; $pidsAt=[datetime]::MinValue; . $sweep; $warnings=@($script:messages | Where-Object {$_ -like 'WARN:browser list*'}).Count; Assert-Equal $warnings (2*[int]$hasProcessFix) 'Recovered warning count' }
+Test-Case 'Warning resets after recovery' { $script:closeOnAction=$false; $script:processTable=@{}; . $sweep; $script:processTable=@{chrome=101}; $pidsAt=[datetime]::MinValue; . $sweep; $script:processTable=@{}; $pidsAt=[datetime]::MinValue; . $sweep; $warnings=@($script:messages | Where-Object {$_ -like 'WARN:browser list*'}).Count; Assert-Equal $warnings (2*[int]$hasProcessFix) 'Recovered warning count' }
 Test-Case 'Custom title override preserved' { $DialogPattern='^Custom consent$'; $window.TitleText='Custom consent'; . $sweep; Assert-Equal $script:clicks 1 'Custom title' }
 Test-Case 'Custom button override preserved' { $ApprovePattern='^Permit$'; Set-Buttons @('Permit'); . $sweep; Assert-Equal $script:clicks 1 'Custom button' }
+Test-Case 'Ignored action does not increment counter' {
+    $script:closeOnAction=$false; . $sweep
+    Assert-Equal $approved 0 'Pending count'
+    Assert-Equal $pendingApprovals.Count 1 'Pending identity'
+    Assert-Equal @($messages | Where-Object {$_ -like 'ACTION:*'}).Count 0 'Action events'
+}
+Test-Case 'Retries count one dismissed dialog' {
+    $script:closeOnAction=$false; . $sweep
+    $lastSeen['11']=(Get-Date).AddSeconds(-3); . $sweep
+    Assert-Equal $script:clicks 2 'Retry attempts'
+    Assert-Equal $approved 0 'No premature count'
+    $window.Visible=$false; . $sweep; . $sweep
+    Assert-Equal $approved 1 'One dismissal'
+    Assert-Equal $pendingApprovals.Count 0 'No retained pending entries'
+    Assert-Equal $lastSeen.Count 0 'Old dedup entry cleared'
+    Assert-Equal @($messages | Where-Object {$_ -like 'ACTION:*'}).Count 1 'One action event'
+}
+Test-Case 'Delayed dismissal is counted on a later idle sweep' {
+    $script:closeOnAction=$false; . $sweep; . $sweep
+    Assert-Equal $approved 0 'No early dismissal'
+    $window.Visible=$false; . $sweep
+    Assert-Equal $approved 1 'Delayed dismissal'
+}
+Test-Case 'Reused HWND with new button identity is a separate dialog' {
+    $script:closeOnAction=$false; . $sweep
+    Set-Buttons @('Cancel','Allow'); . $sweep
+    Assert-Equal $approved 1 'First dialog counted'
+    Assert-Equal $script:clicks 2 'Second dialog not blocked by old dedup entry'
+    $window.Visible=$false; . $sweep
+    Assert-Equal $approved 2 'Second dialog counted'
+}
+Test-Case 'Accessibility errors are not counted as dismissals' {
+    $script:closeOnAction=$false; . $sweep; $script:failFindFirst=$true; . $sweep
+    Assert-Equal $approved 0 'No count from UIA error'
+    Assert-Equal $pendingApprovals.Count 1 'Pending entry preserved'
+}
 $sha = [Security.Cryptography.SHA256]::Create()
 $sourceHash = [BitConverter]::ToString($sha.ComputeHash([IO.File]::ReadAllBytes($SourcePath))).Replace('-','')
 $sha.Dispose()

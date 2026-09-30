@@ -1,4 +1,5 @@
-param([string]$ScriptPath, [string]$SourcePath, [string]$ResultDirectory)
+param([string]$ScriptPath, [string]$SourcePath, [string]$ResultDirectory,
+      [ValidateRange(10,7200)][int]$TimeoutSeconds=45)
 $ErrorActionPreference='Stop'
 Add-Type @'
 using System;
@@ -22,7 +23,7 @@ public static class TestDesktop {
  [DllImport("kernel32.dll")] static extern uint WaitForSingleObject(IntPtr handle,uint ms);
  [DllImport("kernel32.dll")] static extern bool GetExitCodeProcess(IntPtr handle,out uint code);
  [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr handle);
- public static int Run(string exe, string command, string directory) {
+ public static int Run(string exe, string command, string directory, uint timeoutMs) {
   string name="YesDevTest_"+Guid.NewGuid().ToString("N");
   IntPtr desktop=CreateDesktop(name,IntPtr.Zero,IntPtr.Zero,0,0x1ff,IntPtr.Zero);
   if(desktop==IntPtr.Zero) throw new System.ComponentModel.Win32Exception();
@@ -31,7 +32,7 @@ public static class TestDesktop {
    STARTUPINFO si=new STARTUPINFO(); si.cb=Marshal.SizeOf(si); si.desktop="winsta0\\"+name;
    if(!CreateProcess(exe,new System.Text.StringBuilder(command),IntPtr.Zero,IntPtr.Zero,false,0x08000000,
       IntPtr.Zero,directory,ref si,out pi)) throw new System.ComponentModel.Win32Exception();
-   if(WaitForSingleObject(pi.process,45000)!=0) {
+   if(WaitForSingleObject(pi.process,timeoutMs)!=0) {
     var kill=new ProcessStartInfo("taskkill.exe","/PID "+pi.pid+" /T /F");
     kill.UseShellExecute=false; kill.CreateNoWindow=true;
     using(var p=Process.Start(kill)) p.WaitForExit(5000);
@@ -52,6 +53,6 @@ $sourceAbsolute = (Resolve-Path -LiteralPath $SourcePath).Path
 $resultAbsolute = [IO.Path]::GetFullPath($ResultDirectory)
 New-Item -ItemType Directory -Path $resultAbsolute -Force | Out-Null
 $command = '"{0}" -NoProfile -ExecutionPolicy Bypass -File "{1}" -SourcePath "{2}" -ResultDirectory "{3}"' -f $exe,$scriptAbsolute,$sourceAbsolute,$resultAbsolute
-$code = [TestDesktop]::Run($exe,$command,(Split-Path -Parent $scriptAbsolute))
+$code = [TestDesktop]::Run($exe,$command,(Split-Path -Parent $scriptAbsolute),[uint32]($TimeoutSeconds*1000))
 Write-Output "Private desktop test exit code: $code"
 exit $code

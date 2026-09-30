@@ -12,6 +12,7 @@ public static class DesktopName {
  [DllImport("user32.dll")] static extern IntPtr GetThreadDesktop(uint id);
  [DllImport("user32.dll",CharSet=CharSet.Unicode)] static extern bool GetUserObjectInformation(IntPtr h,int index,StringBuilder text,int len,out int needed);
  [DllImport("user32.dll",CharSet=CharSet.Unicode)] public static extern bool SetWindowText(IntPtr h,string text);
+ [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h,int mode);
  public static string Current() { var s=new StringBuilder(256); int n; GetUserObjectInformation(GetThreadDesktop(GetCurrentThreadId()),2,s,512,out n); return s.ToString(); }
 }
 '@
@@ -27,7 +28,7 @@ public static class DesktopName {
             . ([scriptblock]::Create($stmt.Extent.Text))
         }
         if($stmt -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
-           $stmt.Name -in @('Invoke-Element','Invoke-LegacyElement','Find-DialogWindows','Approve-Dialog')) {
+           $stmt.Name -in @('Invoke-Element','Invoke-LegacyElement','Find-DialogWindows','Approve-Dialog','Complete-PendingApprovals')) {
             . ([scriptblock]::Create($stmt.Extent.Text))
         }
     }
@@ -224,13 +225,18 @@ public static class Provider {
     $loopText=$loop.Body.Extent.Text.Trim()
     $sweep=[scriptblock]::Create($loopText.Substring(1,$loopText.Length-2))
     $Observe=$false; $parent=$null; $approved=0; $lastSeen=@{}; $procIds=@()
+    $pendingApprovals=@{}
     $pidsAt=[datetime]::MinValue; $lastTidy=[datetime]::Now; $procIdsWarned=$false; $IntervalMs=1
     Check 'Real window discovery and process filtering: English' {
         [void][DesktopName]::SetWindowText($dialog,'Allow remote debugging?')
         Expect (Find-DialogWindows).Count 1
         . $sweep
-        Expect $approved 1
+        Expect $approved 0
         Wait-Count 34 2
+        [void][DesktopName]::ShowWindow($dialog,0)
+        Expect (Complete-PendingApprovals) 1
+        Expect (Complete-PendingApprovals) 0
+        [void][DesktopName]::ShowWindow($dialog,4)
     }
     Check 'Real Chinese dialog and button approval' {
         $lastSeen=@{}; $approved=0
@@ -244,8 +250,11 @@ public static class Provider {
         Expect $second.Current.Name $zhCancel
         Expect (Find-DialogWindows).Count 1
         . $sweep
-        Expect $approved 1
+        Expect $approved 0
         Wait-Count 35 2
+        [void][DesktopName]::ShowWindow($dialog,0)
+        Expect (Complete-PendingApprovals) 1
+        [void][DesktopName]::ShowWindow($dialog,4)
     }
     Check 'Observe mode on real dialog performs no action' {
         $Observe=$true

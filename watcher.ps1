@@ -302,7 +302,8 @@ function Find-DialogWindows {
 }
 
 # Approve one dialog window.
-# Returns 'approved' | 'failed' | 'observe' | 'nomatch'.
+# Returns 'pending' | 'failed' | 'observe' | 'nomatch'. A successful API call
+# is only an attempt: Chromium can ignore an action on a newly opened prompt.
 function Approve-Dialog {
     param([IntPtr]$Hwnd)
 
@@ -323,10 +324,53 @@ function Approve-Dialog {
     if ($Observe) { Write-Log "  observe mode - not clicking" 'OBSERVE'; return 'observe' }
     if (-not $target) { Write-Log "  no button matched /$ApprovePattern/ - left alone" 'WARN'; return 'nomatch' }
 
+    $buttonId = $target.GetRuntimeId()
+    $processId = [int][YesDevWin]::Pid($Hwnd)
     $how = Invoke-Element -Element $target -DialogHwnd $Hwnd
-    if ($how) { Write-Log "  APPROVED via $how" 'ACTION'; return 'approved' }
+    if ($how) {
+        # Keep values only, never UI Automation elements or COM patterns.
+        $pendingApprovals[[string]$Hwnd] = @{
+            Hwnd = $Hwnd; ProcessId = $processId; ButtonId = $buttonId; Method = $how
+        }
+        Write-Log "  approval attempted via $how; waiting for dialog dismissal"
+        return 'pending'
+    }
     Write-Log "  FAILED to invoke Allow button" 'ERROR'
     return 'failed'
+}
+
+function Complete-PendingApprovals {
+    $completed = 0
+    foreach ($key in @($pendingApprovals.Keys)) {
+        $entry = $pendingApprovals[$key]
+        $dismissed = -not [YesDevWin]::IsWindowVisible($entry.Hwnd)
+        if (-not $dismissed) {
+            if ([int][YesDevWin]::Pid($entry.Hwnd) -ne $entry.ProcessId) {
+                $dismissed = $true
+            } else {
+                try {
+                    $host_ = $AE::FromHandle($entry.Hwnd)
+                    if (-not $host_) { continue }
+                    $identity = New-Object System.Windows.Automation.PropertyCondition(
+                        [System.Windows.Automation.AutomationElement]::RuntimeIdProperty,
+                        [int[]]$entry.ButtonId)
+                    # A new prompt can reuse the same HWND. Match the original
+                    # button identity so that it is counted and retried separately.
+                    $dismissed = $null -eq $host_.FindFirst($TS::Descendants, $identity)
+                } catch {
+                    # A transient accessibility error is not evidence of dismissal.
+                    continue
+                }
+            }
+        }
+        if ($dismissed) {
+            Write-Log "  APPROVED via $($entry.Method); dialog dismissed (hwnd=$($entry.Hwnd))" 'ACTION'
+            $pendingApprovals.Remove($key)
+            $lastSeen.Remove($key)
+            $completed++
+        }
+    }
+    return $completed
 }
 
 # One engine is enough; a second would race the first onto the same dialog.
@@ -340,6 +384,7 @@ Write-Log "engine started (observe=$($Observe.IsPresent), interval=${IntervalMs}
 
 $approved   = 0
 $lastSeen   = @{}                    # hwnd -> last action, so one dialog is not clicked twice
+$pendingApprovals = @{}             # hwnd -> value-only identity awaiting dismissal
 $procIds    = @()
 $pidsAt     = [datetime]::MinValue
 $procIdsWarned = $false              # report an unusable -BrowserProcess once, not never
@@ -360,9 +405,16 @@ while ($true) {
             exit 0
         }
 
+        $usedAutomation = $pendingApprovals.Count -gt 0
+        $completed = Complete-PendingApprovals
+        if ($completed -gt 0) {
+            $approved += $completed
+            Write-Log "  total approved this session: $approved"
+        }
         $hwnds = Find-DialogWindows
 
         if ($hwnds.Count -gt 0) {
+            $usedAutomation = $true
             # Only now is the Chrome process list worth reading. Cached for a few
             # seconds either way: Get-Process allocates, and the set barely moves.
             if (((Get-Date) - $pidsAt).TotalSeconds -gt 5) {
@@ -394,10 +446,7 @@ while ($true) {
                     $lastSeen[$key] = Get-Date
 
                     $result = Approve-Dialog -Hwnd $h
-                    if ($result -eq 'approved') {
-                        $approved++
-                        Write-Log "  total approved this session: $approved"
-                    } elseif ($result -eq 'failed') {
+                    if ($result -eq 'failed') {
                         # Don't sit on a dialog we failed to click; sweep it again
                         # immediately rather than waiting out the dedupe window.
                         $lastSeen.Remove($key)
@@ -405,6 +454,14 @@ while ($true) {
                 } catch { }
             }
 
+        }
+
+        $completed = Complete-PendingApprovals
+        if ($completed -gt 0) {
+            $approved += $completed
+            Write-Log "  total approved this session: $approved"
+        }
+        if ($usedAutomation) {
             # UI Automation elements are COM behind managed wrappers. Their memory
             # is native, so it exerts no pressure on the managed heap and nothing
             # would otherwise collect them. Only reached when a dialog appeared.

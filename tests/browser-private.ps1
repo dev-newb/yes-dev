@@ -15,8 +15,9 @@ try {
             . ([scriptblock]::Create($stmt.Extent.Text))
         }
         if($stmt -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
-           $stmt.Name -in @('Find-DialogWindows','Approve-Dialog','Invoke-Element','Invoke-LegacyElement')) {
+           $stmt.Name -in @('Find-DialogWindows','Approve-Dialog','Invoke-Element','Invoke-LegacyElement','Complete-PendingApprovals')) {
             $definition=$stmt.Extent.Text
+            if($stmt.Name -eq 'Invoke-Element') { $invokeDefinition=$definition }
             if($stmt.Name -eq 'Find-DialogWindows') { $definition=$definition.Replace('function Find-DialogWindows','function Find-OriginalDialogWindows') }
             . ([scriptblock]::Create($definition))
         }
@@ -72,13 +73,20 @@ try {
     $loopText=$loop.Body.Extent.Text.Trim()
     $sweep=[scriptblock]::Create($loopText.Substring(1,$loopText.Length-2))
     foreach($mode in @('normal','forced-fallback')) {
+        $definition=$invokeDefinition
+        if($mode -eq 'forced-fallback') {
+            $definition=$definition.Replace('$Element.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()',"throw 'Injected primary failure for fallback test'")
+        }
+        . ([scriptblock]::Create($definition))
         $Observe=$false; $parent=$null; $approved=0; $lastSeen=@{}; $procIds=@(); $pidsAt=[datetime]::MinValue
+        $pendingApprovals=@{}
         $lastTidy=[datetime]::Now; $procIdsWarned=$false; $IntervalMs=100
         $socket=New-Object Net.WebSockets.ClientWebSocket
         $cancel=New-Object Threading.CancellationTokenSource
         $cancel.CancelAfter(12000)
         $connect=$socket.ConnectAsync([uri]$endpoint,$cancel.Token)
         $sawDialog=$false; $actions=0; $titles=@(); $labels=@(); $lastAction=[datetime]::MinValue
+        $logStart=$logs.Count
         while(-not $connect.IsCompleted) {
             foreach($candidate in [YesDevWin]::VisibleOfClass($WindowClass)) {
                 if([YesDevWin]::Pid($candidate) -eq $browser.Id) {
@@ -93,21 +101,8 @@ try {
                 $hostElement=$AE::FromHandle($dialog)
                 $buttons=$hostElement.FindAll($TS::Descendants,$btnCond)
                 $labels=@($buttons | ForEach-Object {$_.Current.Name})
-                # Match the watcher's existing two-second retry interval. Chromium
-                # can discard an action sent just after a security prompt appears.
-                if($mode -eq 'forced-fallback' -and ((Get-Date)-$lastAction).TotalSeconds -ge 2) {
-                    $target=$buttons | Where-Object {$_.Current.Name -match $ApprovePattern} | Select-Object -First 1
-                    if(-not $target) { throw 'No approval button matched in real browser dialog' }
-                    $proxy=[pscustomobject]@{Actual=$target;Current=$target.Current}
-                    $proxy | Add-Member ScriptMethod GetCurrentPattern { param($Pattern); throw 'Force primary failure for native fallback test' }
-                    $proxy | Add-Member ScriptMethod GetRuntimeId { return ,$this.Actual.GetRuntimeId() }
-                    $how=Invoke-Element -Element $proxy -DialogHwnd $dialog
-                    if($how -ne 'LegacyDoDefaultAction') { throw "Native browser fallback failed: $how" }
-                    $actions++
-                    $lastAction=Get-Date
-                }
             }
-            if($mode -eq 'normal') { . $sweep } else { Start-Sleep -Milliseconds 100 }
+            . $sweep
         }
         $connect.GetAwaiter().GetResult()
         if(-not $sawDialog -or $socket.State -ne 'Open') { throw 'Connection did not prove consent-dialog approval' }
@@ -118,6 +113,15 @@ try {
         $received=$socket.ReceiveAsync([ArraySegment[byte]]::new($buffer),$cancel.Token).GetAwaiter().GetResult()
         $response=[Text.Encoding]::UTF8.GetString($buffer,0,$received.Count) | ConvertFrom-Json
         if(-not $response.result.product) { throw 'Browser.getVersion returned no product' }
+        $countDeadline=[datetime]::UtcNow.AddSeconds(2)
+        while($pendingApprovals.Count -gt 0 -and [datetime]::UtcNow -lt $countDeadline) { . $sweep }
+        $requestLogs=@($logs | Select-Object -Skip $logStart)
+        $actionEvents=@($requestLogs | Where-Object {$_ -like 'ACTION:*'}).Count
+        $actions=@($requestLogs | Where-Object {$_ -like '*approval attempted via LegacyDoDefaultAction*'}).Count
+        if($approved -ne 1 -or $actionEvents -ne 1 -or $pendingApprovals.Count -ne 0) {
+            throw "One connection must count once: approvals=$approved events=$actionEvents pending=$($pendingApprovals.Count)"
+        }
+        if($mode -eq 'forced-fallback' -and $actions -lt 1) { throw 'Fallback path was not exercised' }
         [void]$results.Add([pscustomobject]@{mode=$mode;passed=$true;product=$response.result.product;dialog_titles=@($titles | Select-Object -Unique);button_labels=$labels;logged_approvals=$approved;native_fallback_actions=$actions})
         $socket.Abort(); $socket.Dispose(); $socket=$null; $cancel.Dispose()
         Start-Sleep -Milliseconds 200
