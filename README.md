@@ -11,6 +11,19 @@ debugging endpoint. If you drive Chrome with more than one agent or automation
 client, those prompts stack up and each one blocks its client until a human
 clicks Allow. `Yes, Dev` sits in the tray and answers them.
 
+**Latest release: [v1.2.1 - Windows approval and counter fixes](https://github.com/dev-newb/yes-dev/releases/tag/v1.2.1).**
+[Download the source ZIP](https://github.com/dev-newb/yes-dev/archive/refs/tags/v1.2.1.zip)
+and follow the [Windows install steps](#windows). This is a Python source release,
+not a standalone `.exe` installer.
+
+This release fixes Chrome/Edge process detection, English and Simplified Chinese
+consent dialogs, the native Windows fallback, and approval counting and logging.
+Validation includes **143 passing checks**, **32 simultaneous browser connections**,
+and two 30-minute runs with **480 successful connections and 480 saved counter
+events**. See the [test report and memory measurements](docs/testing/windows-validation-2026-09-30.md).
+The macOS code is unchanged; the separate macOS Chrome 153 fix in
+[#4](https://github.com/dev-newb/yes-dev/pull/4) is not included.
+
 Measured on Chrome 151: four parallel attaches went from ~35 seconds of waiting
 on a human to **2.4-4.4 seconds**, unattended.
 
@@ -20,11 +33,12 @@ on a human to **2.4-4.4 seconds**, unattended.
 Shown here against a plain backdrop; on a real desktop they drift over whatever
 is behind them.*
 
-**Field data**, from the machine it was built on: 454 approvals over 8 days,
+**Earlier Windows field data**, from the machine it was built on: 454 approvals over 8 days,
 one failed click (99.8% success), no runaway pauses, and it came back by itself
 after a reboot. That figure is from the Windows build, which has the mileage;
 the macOS build is newer and is described honestly under
-[Known limitations](#known-limitations).
+[Known limitations](#known-limitations). These are historical measurements;
+the v1.2.1 validation is linked above.
 
 > ### Windows: update if you are running 1.0.0
 >
@@ -40,9 +54,10 @@ the macOS build is newer and is described honestly under
 > prompts with nothing watching the rate - the 51.5 GB one had been running
 > unattended for five days.
 >
-> Both are fixed in **[1.1.0](https://github.com/dev-newb/yes-dev/releases/tag/v1.1.0)**.
-> If you are on 1.0.0, `git pull` and restart the tray. Full detail, with the
-> before and after measurements, is in the [changelog](CHANGELOG.md).
+> Both were fixed in **1.1.0**. Install the current
+> **[v1.2.1 release](https://github.com/dev-newb/yes-dev/releases/tag/v1.2.1)**
+> to get those repairs and the new Windows fixes. See [updating on Windows](#updating-on-windows)
+> and the [changelog](CHANGELOG.md).
 
 ## Why not just turn the prompt off?
 
@@ -65,9 +80,11 @@ to navigate anywhere as you. Auto-approving means **any** local process that
 attaches gets in, not just the ones you started.
 
 On a single-user dev machine that's usually a fine trade. It is still a real
-reduction in protection, so `Yes, Dev` ships with two mitigations on by default:
+reduction in protection, so `Yes, Dev` provides two controls:
 
 - **Stay on for** a fixed window (15 min / 1 hour / 4 hours), then it disarms itself.
+  On Windows, the default is **Until I turn it off**; select a time limit if you
+  want automatic disarming.
 - **Burst guard** reacts if approvals spike past 60 in a minute, which is well
   clear of normal load but far below a runaway loop. By default it asks what to
   do, with a visible five-second countdown: **Stop** or **Allow for one hour**.
@@ -85,22 +102,32 @@ leave an engine approving prompts with nothing watching the rate. On macOS the
 engine is passed `--exit-with-parent` and stops itself the moment it is
 reparented; on both platforms the tray kills the engine on the way out.
 
-If you only need automation against a *throwaway* profile, you don't need this at
-all: launch Chrome with its own `--user-data-dir` and it never prompts. This tool
-is for when you need your real, signed-in browser.
+If you use command-line remote debugging with a separate `--user-data-dir`,
+that direct connection mode does not use this consent prompt. Yes, Dev is for
+the per-connection approval mode enabled through `chrome://inspect`. A fresh
+profile can also use approval mode, as the isolated tests do.
 
 ## Install
 
-Clone the repo, then follow your platform. `requirements.txt` covers both -
+Download the [v1.2.1 source ZIP](https://github.com/dev-newb/yes-dev/archive/refs/tags/v1.2.1.zip)
+and extract it, or clone the current repository:
+
+```bash
+git clone https://github.com/dev-newb/yes-dev.git
+cd yes-dev
+```
+
+Then follow your platform. `requirements.txt` covers both -
 its markers install only what your platform needs, so `pip install -r
 requirements.txt` works either place.
 
 ### Windows
 
-Requires Windows and Python 3.9+.
+Requires Windows, Python 3.9+, and Windows PowerShell 5.1. Run these commands
+from the extracted or cloned project folder.
 
 ```bash
-pip install pystray pillow
+python -m pip install -r requirements.txt
 ```
 
 ```bash
@@ -109,6 +136,17 @@ pythonw yes_dev.pyw
 
 Right-click the tray icon and tick **Start at login** to make it permanent (it
 drops a shortcut in your Startup folder - no scheduled task, no admin rights).
+
+### Updating on Windows
+
+Exit Yes, Dev from its tray menu before replacing its files. For a Git checkout
+on `main`, run `git pull --ff-only` in the project folder. If you installed from
+a ZIP, replace the old source files with the extracted v1.2.1 files.
+
+Run `python -m pip install -r requirements.txt`, then start `pythonw yes_dev.pyw`
+again. The configuration stays in `%LOCALAPPDATA%\YesDev\config.json`. If you
+move the project to a different folder, turn **Start at login** off and then on
+again so its shortcut points to the new location.
 
 ### macOS
 
@@ -138,13 +176,15 @@ right home for it and is not built yet; see
 
 ### Getting Chrome to prompt at all
 
-From Chrome 136, `--remote-debugging-port` is **ignored on your default profile**
-unless it is paired with a non-default `--user-data-dir` - and a throwaway
-profile never prompts, so it is not the thing to test against. To attach to your
-real, signed-in browser, turn on **Remote Debugging** at
-`chrome://inspect/#remote-debugging`. Each attach to the browser endpoint then
-raises the consent prompt, which is what this app answers. The consent gates the
-CDP WebSocket handshake itself, so a blocked client sits waiting mid-handshake.
+[Chrome 136 changed the command-line debugging switches](https://developer.chrome.com/blog/remote-debugging-port):
+`--remote-debugging-port` and `--remote-debugging-pipe` require a non-default
+`--user-data-dir`. That direct mode differs from per-connection approval mode.
+
+For the consent flow that Yes, Dev handles, turn on **Remote Debugging** at
+`chrome://inspect/#remote-debugging`. Each new connection then requires the
+consent prompt. This also works in a fresh profile; the isolated browser tests
+use fresh profiles with approval mode enabled. The prompt gates the CDP
+WebSocket handshake, so the connection waits until approval.
 
 ## The menu
 
