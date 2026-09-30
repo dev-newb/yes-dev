@@ -154,6 +154,8 @@ class YesDev:
         self.allow_until: datetime | None = None   # burst guard snoozed by the user
         self.icon: pystray.Icon | None = None
         self._log_pos = 0
+        self._log_pending = b""
+        self._log_identity = None
         self._lock = threading.Lock()
         self._puffs = None            # built on first use; Tk costs a thread
 
@@ -180,7 +182,10 @@ class YesDev:
             args.append("-Observe")
 
         # Only surface approvals logged from here on, not the whole history.
-        self._log_pos = LOG_PATH.stat().st_size if LOG_PATH.exists() else 0
+        log_stat = LOG_PATH.stat() if LOG_PATH.exists() else None
+        self._log_pos = log_stat.st_size if log_stat else 0
+        self._log_identity = (log_stat.st_dev, log_stat.st_ino) if log_stat else None
+        self._log_pending = b""
         self.proc = subprocess.Popen(args, creationflags=CREATE_NO_WINDOW)
         log(f"engine started pid={self.proc.pid} log_pos={self._log_pos}")
 
@@ -234,26 +239,34 @@ class YesDev:
             self._read_log()
 
     def _read_log(self) -> None:
-        if not LOG_PATH.exists():
-            return
-        size = LOG_PATH.stat().st_size
-        if size < self._log_pos:
-            self._log_pos = 0                    # log was rotated or cleared
-        if size == self._log_pos:
-            return
-        # Binary, not text: the engine's log is UTF-8-with-BOM and CRLF, and byte
+        # Binary, not text: UTF-8 logs can have a BOM and CRLF, and byte
         # offsets from stat() are only meaningful against a binary stream.
         try:
             with LOG_PATH.open("rb") as fh:
+                # Inspect the opened file, so rotation between stat and open
+                # cannot make an old byte offset apply to a different file.
+                log_stat = os.fstat(fh.fileno())
+                identity = (log_stat.st_dev, log_stat.st_ino)
+                if identity != self._log_identity or log_stat.st_size < self._log_pos:
+                    self._log_pos = 0            # replaced, rotated or cleared
+                    self._log_pending = b""
+                    self._log_identity = identity
+                if log_stat.st_size == self._log_pos:
+                    return
                 fh.seek(self._log_pos)
-                chunk = fh.read().decode("utf-8", errors="replace")
+                chunk = self._log_pending + fh.read()
                 self._log_pos = fh.tell()
         except OSError:
             # The engine holds a brief write lock on every append. Leave _log_pos
             # alone and pick the same bytes up on the next tick.
             return
 
-        hits = sum(1 for line in chunk.splitlines() if "[ACTION]" in line)
+        complete, _, partial = chunk.rpartition(b"\n")
+        # Only the date/time/level prefix is needed for counting. Bound retained
+        # data even if a writer leaves an unusually long line unfinished.
+        self._log_pending = partial[:256]
+        hits = sum(1 for line in complete.decode("utf-8", errors="replace").splitlines()
+                   if line.split(maxsplit=3)[2:3] == ["[ACTION]"])
         if not hits:
             return
 

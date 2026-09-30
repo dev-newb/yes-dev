@@ -195,22 +195,29 @@ a strict UTF-8 read would reject, silently resetting every setting to default.
 
 ### Finding the dialog on Windows
 
-The interesting part is finding the dialog. It is **not** a top-level window -
-it's a Views bubble parented inside the browser frame, so the obvious approach
-of enumerating top-level windows never sees it:
+`watcher.ps1` first enumerates visible top-level `Chrome_WidgetWin_1` windows.
+It matches the consent title and browser process before it reads any UI
+Automation elements. The idle path does not scan the browser's accessibility tree.
 
-```
-Window  Chrome_WidgetWin_1   "<tab title> - Google Chrome"
-  Pane    BrowserRootView
-    Pane    Chrome_WidgetWin_1  "Allow remote debugging?"    <-- dialog host
-      NonClientView > BubbleFrameView > DialogClientView > ButtonRowContainer
-        Button  MdTextButton   "Allow" | "Cancel" | "Turn off in settings"
-```
+The engine invokes the matching Allow button through `InvokePattern`. If that
+fails, it uses the native `LegacyIAccessible` COM interface for the same button
+runtime ID inside the same dialog. Neither method moves the mouse or changes focus.
 
-`watcher.ps1` walks exactly two levels down from each browser frame, matches the
-host window by title, and invokes the Allow button via UI Automation's
-`InvokePattern`. That means **no mouse movement and no focus stealing** - it
-works on background windows while you keep typing somewhere else.
+An action call is logged as an attempt. The engine writes one `[ACTION]` event
+only after the original dialog/button disappears. A pending entry holds only
+the window handle, process ID, button runtime ID and method name, not live UI
+Automation objects. Repeated attempts on one prompt do not increase the tray
+counter or burst rate. A new button identity can be handled immediately even if
+Windows reused the window handle.
+
+The counter measures dialog dismissal after an approval action. It cannot inspect
+another client's protocol session. The isolated browser tests verify successful
+CDP connections separately, and require one counter event per tested connection.
+
+The log writer permits concurrent reading and uses bounded retries for short
+file locks. A confirmation stays pending until its ACTION record is saved. A
+reader that blocks log rotation does not cause the current event to be dropped;
+the engine appends it and retries rotation on a later write.
 
 ### Finding the dialog on macOS
 
@@ -394,11 +401,11 @@ python3 watcher_mac.py --observe
 
 ## Known limitations
 
-- **English Chrome only.** The dialog is matched by its title, "Allow remote
-  debugging?", and the button by its label. A localised Chrome uses translated
-  strings and nothing will match. Both are parameters on `watcher.ps1`
-  (`-DialogPattern`, `-ApprovePattern`); `watcher_mac.py` has the equivalent
-  patterns as module constants. Neither tray exposes them yet.
+- **Windows supports English and Simplified Chinese (zh-CN) dialogs.** The
+  dialog title and approval button must match the configured language patterns.
+  Other languages need custom `-DialogPattern` and `-ApprovePattern` values in
+  `watcher.ps1`. The Windows tray does not expose these parameters. The macOS
+  patterns remain unchanged by the Windows fixes.
 - **Matched by string, so a Chrome rename breaks it.** If a future Chrome
   retitles the dialog, approvals silently stop. The log still records dialogs it
   found but could not act on, so observe mode will tell you quickly.
