@@ -13,18 +13,21 @@ identity of the AX refs that were pressed (a dismissed sheet's refs answer every
 read with AXError -25202), never by whether something still sits at its
 coordinates: Chrome queues these prompts when several CDP clients connect at
 once and draws the next one exactly where the last one was. Under multi-client
-load AXPress can report success while the sheet outlives the verify wait; a longer
-AX messaging timeout and a re-press clears that with no click at all. There is no
-synthetic click at all: a sheet that survives the retries is logged FAILED and
-pressed again next sweep, so a real approval is never missed, and a Chrome that
-ignored AXPress would show up in the log rather than get a blind click.
+load AXPress can report success while the sheet outlives the verify wait. On
+Chrome 153 AXPress is acknowledged and Allow never runs, and a second AXPress
+removes the sheet while leaving the debug socket unapproved - success in the
+log, nothing granted. So the fallback is a keystroke posted to Chrome's pid
+instead: no pointer movement, no app activation, and it cannot land anywhere
+but Chrome. A sheet that survives both is logged FAILED and retried next sweep.
 
-The dialog's shape in the accessibility tree, confirmed against a live prompt on
-Chrome 152, is an AXSheet on the browser window wrapping an alert:
+The dialog's shape in the accessibility tree is an AXSheet on the browser
+window wrapping an alert. Chrome 152 titled the sheet itself. Chrome 153 leaves
+AXTitle empty and puts the same string on an AXHeading inside it:
 
     AXWindow  "<tab title> - Google Chrome"
-      AXSheet  "Allow remote debugging?"
+      AXSheet  title=""
         AXGroup / AXSubrole=AXApplicationAlertDialog
+          AXHeading  "Allow remote debugging?"
           AXButton  "Turn off in settings" | "Cancel" | "Allow"
 
 Two things that title alone will not tell you: the same title is also carried
@@ -67,18 +70,19 @@ try:
         AXUIElementCreateApplication,
         AXUIElementCopyAttributeValue,
         AXUIElementPerformAction,
-        AXUIElementSetMessagingTimeout,
+        AXUIElementSetAttributeValue,
         AXValueGetValue,
         kAXErrorInvalidUIElement,
         kAXErrorSuccess,
         kAXValueCGPointType,
         kAXValueCGSizeType,
     )
-    from AppKit import NSRunningApplication, NSWorkspace
+    from AppKit import NSRunningApplication, NSUserDefaults, NSWorkspace
+    from Quartz import CGEventCreateKeyboardEvent, CGEventPostToPid
 except ImportError:
     sys.exit(
         "Yes, Dev macOS engine needs pyobjc:\n"
-        "    pip3 install pyobjc-framework-Cocoa pyobjc-framework-ApplicationServices"
+        "    pip3 install pyobjc-framework-Cocoa pyobjc-framework-ApplicationServices pyobjc-framework-Quartz"
     )
 
 # Chrome variants. Edge is Chromium too and shows the same dialog; the tray adds
@@ -94,13 +98,51 @@ EDGE_BUNDLES = ("com.microsoft.edgemac", "com.microsoft.edgemac.beta")
 DIALOG_PATTERN = re.compile(r"^allow remote debugging\??$", re.I)
 APPROVE_PATTERN = re.compile(r"^(allow|approve)$", re.I)
 
+
+def _is_consent_host(title: str, has_heading: bool, is_dialog: bool) -> bool:
+    """Whether this element is the remote-debugging consent container.
+
+    Chrome 152 puts the prompt on the sheet's own title. Chrome 153 leaves
+    that empty and puts the same string on a heading inside the sheet. A
+    dialog with some other title, or an untitled element that is not a
+    dialog, is not it.
+
+    @param title - AXTitle or AXDescription, already stripped.
+    @param has_heading - True when a descendant heading matches the prompt.
+    @param is_dialog - True when the element is a sheet or alert dialog.
+    @returns True when the element should be searched for the Allow button.
+    """
+    if not is_dialog:
+        return False
+    if DIALOG_PATTERN.match(title):
+        return True
+    return title == "" and has_heading
+
+
+# ponytail: title-vs-heading decision only. A live sheet still needs Chrome.
+assert _is_consent_host("Allow remote debugging?", False, True)
+assert _is_consent_host("", True, True)
+assert not _is_consent_host("", False, True)
+assert not _is_consent_host("GitHub", True, True)
+assert not _is_consent_host("", True, False)
+
 POLL_MS_DEFAULT = 250
 DEDUPE_SECONDS = 2.0     # don't re-press one dialog mid-teardown ...
 DEDUPE_MAX = 400         # ... but cap the memory so a long run can't grow forever
+AUDIT_MAX = 200          # distinct sheet-candidate decisions remembered before the set resets
 # ponytail: fixed sleep, not AX notification. Bump if Chrome teardown gets slower.
 VERIFY_WAIT_S = 0.5
-AX_RETRIES = 2                 # extra AXPress attempts before any synthetic click
-AX_MESSAGING_TIMEOUT_S = 2.0   # give a busy Chrome longer to answer the re-press
+# pyobjc does not re-export Carbon's kVK_* virtual keycodes.
+VK_TAB = 0x30
+VK_SPACE = 0x31
+# Chromium's InputEventActivationProtector drops input within 500ms of a
+# security-sensitive dialog appearing. On Chrome 154 that covers AXPress too:
+# a press inside the window returns success and does nothing, and only a later
+# press clears the sheet. So both the first press and any keystroke wait it
+# out, measured from the sweep that first saw the sheet.
+ACTIVATION_GUARD_S = 0.6
+# Tab stops to walk looking for Allow: three buttons plus slack.
+MAX_TAB_STOPS = 6
 
 
 
@@ -178,6 +220,50 @@ def _is_dialog_role(element) -> bool:
     return (_attr(element, "AXSubrole") or "") in _DIALOG_SUBROLES
 
 
+def _element_label(element) -> str:
+    """AXTitle, or AXDescription when the title is empty."""
+    return str(_attr(element, "AXTitle") or _attr(element, "AXDescription") or "").strip()
+
+
+def _has_dialog_heading(element, depth: int = 0) -> bool:
+    """Whether an AXHeading under element carries the consent prompt.
+
+    Only called for an untitled sheet. The heading sits a few groups down
+    from the sheet, above the buttons, so this never enters the page DOM.
+
+    @param element - Dialog-role element whose own title was empty.
+    @param depth - How many levels below that element this call is.
+    @returns True when a heading matches DIALOG_PATTERN.
+    """
+    if depth > 5:
+        return False
+    if (_attr(element, "AXRole") or "") == "AXHeading":
+        return bool(DIALOG_PATTERN.match(_element_label(element)))
+    for child in _children(element)[:8]:
+        if _has_dialog_heading(child, depth + 1):
+            return True
+    return False
+
+
+def _keyboard_navigation() -> bool:
+    """Whether Tab moves focus between controls on this Mac.
+
+    System Settings > Keyboard > Keyboard navigation, stored as bit 2 of
+    AppleKeyboardUIMode, off by default. (Not the Accessibility pane's Full
+    Keyboard Access, which is a separate feature.) Chrome's dialogs follow it.
+    Measured on Chrome 154: with it off, the AXFocused write on Allow reads back
+    false and Tab never reaches the button, so neither keyboard route can work;
+    with it on, the focus write lands and Space grants.
+
+    @returns True when Tab can reach buttons.
+    """
+    try:
+        mode = NSUserDefaults.standardUserDefaults().integerForKey_("AppleKeyboardUIMode")
+    except Exception:
+        return False
+    return bool(int(mode) & 2)
+
+
 def _is_visible(element) -> bool:
     """Skip hidden/offscreen elements: a dismissed dialog lingers briefly in the
     tree and would otherwise be approved a second time."""
@@ -203,6 +289,8 @@ class Engine:
         self.diagnostics = diagnostics
         self._parent_pid = os.getppid()
         self._seen: dict[str, float] = {}    # dedupe key -> last-press wall clock
+        self._audited: set[tuple] = set()    # sheet-candidate decisions already logged
+        self._first_seen: dict[str, float] = {}  # dedupe key -> sweep clock when first seen
         self._next_diagnostic_at = 0.0
 
     # -------- logging: byte-for-byte the format the tray parses --------
@@ -241,10 +329,11 @@ class Engine:
         return out
 
     def find_dialog_hosts(self, app_element, diag: list[str] | None = None) -> list:
-        """Collect elements whose title matches the dialog.
+        """Collect the consent sheet under each Chrome window.
 
-        The dialog is an AXSheet titled 'Allow remote debugging?' one level
-        below a browser AXWindow - confirmed on Chrome 152, but *which*
+        Chrome 152 titles the AXSheet. Chrome 153 leaves that title empty and
+        puts the prompt on a heading inside the sheet. Either shape counts.
+        One level of window children only, but *which*
         attribute exposes it there is not stable. A live probe against a real
         prompt found window.AXSheets returning fourteen entries, every one a
         stale/invalid ref (AXError -25202), while the actual sheet showed up
@@ -261,15 +350,41 @@ class Engine:
         if diag is not None:
             diag.append(f"windows={len(windows)}")
         for window in windows:
-            title = _attr(window, "AXTitle") or ""
-            if DIALOG_PATTERN.match(str(title).strip()) and _is_dialog_role(window):
+            if _is_consent_host(_element_label(window), False, _is_dialog_role(window)):
                 self._add_host(window, hits, seen)
             candidates = (_attr(window, "AXSheets") or []) + (_attr(window, "AXChildren") or [])
             if diag is not None:
                 diag.append(f"candidates={len(candidates)}")
             for candidate in candidates:
-                title = _attr(candidate, "AXTitle") or _attr(candidate, "AXDescription") or ""
-                if DIALOG_PATTERN.match(str(title).strip()) and _is_dialog_role(candidate):
+                label = _element_label(candidate)
+                is_dialog = _is_dialog_role(candidate)
+                has_heading = False
+                # The heading walk is for the untitled shape only. A titled
+                # dialog that is not the prompt (a JavaScript alert, say) is
+                # rejected on its title; walking it would cost the same eight
+                # children by five levels and change nothing.
+                if is_dialog and label == "":
+                    has_heading = _has_dialog_heading(candidate)
+                accepted = _is_consent_host(label, has_heading, is_dialog)
+                if is_dialog:
+                    # Left in on purpose. Chrome 153's sheet has an empty title,
+                    # so a miss here is otherwise invisible (hosts=0, no buttons).
+                    # Once per distinct decision, not once per sweep: an alert
+                    # left standing would otherwise write four lines a second
+                    # for as long as it stood, and bury the lines that matter.
+                    decision = (label, has_heading, accepted,
+                                str(_attr(candidate, "AXRole")),
+                                str(_attr(candidate, "AXSubrole")))
+                    if decision not in self._audited:
+                        if len(self._audited) >= AUDIT_MAX:
+                            self._audited.clear()
+                        self._audited.add(decision)
+                        self.log(
+                            f"sheet candidate label={label!r} heading={has_heading} "
+                            f"accept={accepted} role={decision[3]} subrole={decision[4]}",
+                            "AUDIT",
+                        )
+                if accepted:
                     self._add_host(candidate, hits, seen)
         return hits
 
@@ -330,14 +445,40 @@ class Engine:
     _dedupe_key = _host_signature
 
     def _press(self, button) -> str | None:
-        """AXPress the button. Returns the action name on AX success, not Chrome accept."""
+        """AXPress the button. Returns the action name on AX success, not Chrome accept.
+
+        The error code stays in the log. Success here means AX took the action,
+        not that Chrome dismissed the sheet.
+        """
         try:
             err = AXUIElementPerformAction(button, "AXPress")
-            if err == kAXErrorSuccess:
-                return "AXPress"
-        except Exception:
-            pass
+        except Exception as exc:
+            self.log(f"  AXPress raised {exc!r}", "AUDIT")
+            return None
+        self.log(f"  AXPress err={err}", "AUDIT")
+        if err == kAXErrorSuccess:
+            return "AXPress"
         return None
+
+    def _log_press_state(self, host, button, phase: str) -> None:
+        """Record whether the pressed sheet still looks alive.
+
+        A dismissed sheet's refs answer with -25202. Chrome 153 has also
+        invalidated a ref while the dialog was still on screen, which is
+        what a bare APPROVED line cannot tell apart. This line stays.
+
+        @param host - The sheet that was pressed.
+        @param button - The Allow button ref from that same sheet.
+        @param phase - Which wait this snapshot follows.
+        """
+        host_alive = _ref_alive(host)
+        button_alive = _ref_alive(button)
+        visible = _is_visible(host) if host_alive is True else False
+        self.log(
+            f"  {phase} host_alive={host_alive} button_alive={button_alive} "
+            f"visible={visible}",
+            "AUDIT",
+        )
 
     def _raise_host(self, host) -> None:
         """Best-effort AXRaise on the sheet and its parent window so the click lands."""
@@ -375,51 +516,171 @@ class Engine:
             return True
         return _is_visible(host)
 
-    def _ax_retry(self, host, button) -> bool:
-        """Re-issue AXPress a couple of times before reporting the sheet still up.
+    def _focus_button(self, button) -> bool:
+        """Ask AX to move keyboard focus onto the Allow button.
 
-        Live runs showed AXPress reporting success and the sheet still standing
-        after VERIFY_WAIT_S under multi-client load - slow teardown, not a button
-        that ignores AX. A longer messaging timeout plus a re-press clears that
-        with no cursor, no focus change and no coordinates at all: it targets the
-        same ref the identity check watches, so it cannot land on a queued
-        successor. True once the sheet is verified gone."""
-        for element in (button, host):
-            try:
-                AXUIElementSetMessagingTimeout(element, AX_MESSAGING_TIMEOUT_S)
-            except Exception:
-                pass
-        for _ in range(AX_RETRIES):
-            if _ref_alive(button) is False:
-                return True
-            self._press(button)
-            time.sleep(VERIFY_WAIT_S)
-            if not self._sheet_still_up(host, button):
-                return True
-        return False
+        Setting AXFocused is a write, not an action, so Chrome's command
+        dispatch is not involved - the thing that swallows AXPress. Whether
+        Chrome honours it is logged either way.
+
+        @param button - The Allow button.
+        @returns True when the button reports itself focused afterwards.
+        """
+        try:
+            err = AXUIElementSetAttributeValue(button, "AXFocused", True)
+        except Exception as exc:
+            self.log(f"  AXFocused set raised {exc!r}", "AUDIT")
+            return False
+        focused = _attr(button, "AXFocused")
+        self.log(f"  AXFocused set err={err} readback={focused!r}", "AUDIT")
+        return bool(focused)
+
+    def _key(self, pid: int, keycode: int, name: str) -> None:
+        """Post one keystroke to a process without moving the pointer.
+
+        CGEventPostToPid delivers keyboard events but silently drops mouse
+        events, because AppKit hit-tests mouse position against the window
+        server's pointer state and this transport never updates it. Keyboard
+        events carry no position, so they arrive - and they arrive at Chrome
+        only, so they cannot land in whatever the user is typing in.
+
+        @param pid - Target process.
+        @param keycode - Carbon virtual keycode.
+        @param name - Label for the log line.
+        """
+        for pressed in (True, False):
+            event = CGEventCreateKeyboardEvent(None, keycode, pressed)
+            if event is None:
+                self.log(f"  {name} event creation failed", "AUDIT")
+                return
+            CGEventPostToPid(pid, event)
+        self.log(f"  sent {name} to pid {pid}", "AUDIT")
+
+    def _sheet_state(self, host, button) -> str:
+        """The pressed sheet as the keyboard path needs to see it.
+
+        'live': both refs answer and the sheet is on screen. 'gone': a ref
+        answers -25202, which only a torn-down node does, or the sheet has
+        left the screen. 'unknown': no answer (Chrome busy, AX unreachable),
+        which proves nothing either way.
+
+        _sheet_still_up is the negative form and says True for 'unknown',
+        which is right for judging an approval and wrong for sending a key:
+        a keystroke needs the positive form. 'Not proven gone' is not enough.
+
+        @param host - The sheet that was pressed.
+        @param button - Its Allow button.
+        @returns 'live', 'gone' or 'unknown'.
+        """
+        host_alive = _ref_alive(host)
+        button_alive = _ref_alive(button)
+        if host_alive is False or button_alive is False:
+            return "gone"
+        if host_alive is None or button_alive is None:
+            return "unknown"
+        return "live" if _is_visible(host) else "gone"
+
+    def _no_key(self, state: str, when: str, pressed: str) -> str | None:
+        """What to report when the gate closed and no key was sent.
+
+        A sheet proven gone was dismissed by the AXPress already sent, the
+        slow-teardown case seen under multi-client load: that is the approval,
+        reported as such so the tray's burst guard counts it, not as a FAILED
+        line for a sheet nobody can find. One that stopped answering proves
+        nothing and is retried next sweep.
+
+        @param state - 'gone' or 'unknown' from _sheet_state.
+        @param when - Where in the keyboard path the gate closed, for the log.
+        @param pressed - How the sheet was pressed before the keyboard path.
+        @returns pressed for a sheet proven gone, None otherwise.
+        """
+        if state == "gone":
+            self.log(f"  sheet gone {when} - late {pressed} teardown, no key sent", "AUDIT")
+            return pressed
+        self.log(f"  sheet not answering {when} - no key sent, retrying next sweep", "AUDIT")
+        return None
+
+    def _key_approve(self, pid: int, host, button, pressed: str = "AXPress") -> str | None:
+        """Activate Allow with the keyboard. No pointer, no app activation.
+
+        Two ways in. If Chrome honours an AXFocused write, Space on the
+        already-focused button is one keystroke. If it does not, Tab is walked
+        until the button reports focus, which also tells the log how many stops
+        away it is in case Chrome adds a control to the sheet.
+
+        Every keystroke is gated on the sheet that was pressed still being the
+        live, visible node it was: before the focus write, before each Tab, and
+        again immediately before Space, which must also find Allow still
+        focused. A key posted after the sheet has gone lands on whatever Chrome
+        focuses next - the page, or the default button of a queued successor -
+        so the gate closing means no more keys, whatever else it means.
+
+        @param pid - Chrome process showing the sheet.
+        @param host - The sheet, used to gate each key and to verify dismissal.
+        @param button - The Allow button.
+        @param pressed - How the sheet was pressed before this, for the log and
+            for the report when that press turns out to have worked late.
+        @returns 'Space' once the sheet is verified gone after the keystroke,
+            pressed when it went before any key was needed, None while it
+            still stands or stopped answering.
+        """
+        state = self._sheet_state(host, button)
+        if state != "live":
+            return self._no_key(state, "before the focus write", pressed)
+        if not self._focus_button(button):
+            if not _keyboard_navigation():
+                self.log("  Tab walk skipped: Keyboard navigation (System Settings > Keyboard) "
+                         "is off, so Tab cannot reach a button in a Chrome dialog", "AUDIT")
+                return None
+            for stop in range(MAX_TAB_STOPS):
+                state = self._sheet_state(host, button)
+                if state != "live":
+                    return self._no_key(state, f"after {stop} Tab(s)", pressed)
+                self._key(pid, VK_TAB, "Tab")
+                time.sleep(0.1)
+                if _attr(button, "AXFocused"):
+                    self.log(f"  Allow focused after {stop + 1} Tab(s)", "AUDIT")
+                    break
+            else:
+                self.log(f"  Allow never took focus in {MAX_TAB_STOPS} Tabs", "AUDIT")
+                return None
+        state = self._sheet_state(host, button)
+        if state != "live":
+            return self._no_key(state, "before Space", pressed)
+        if not _attr(button, "AXFocused"):
+            self.log("  Allow not focused at the moment of Space - not sending", "AUDIT")
+            return None
+        self._key(pid, VK_SPACE, "Space")
+        time.sleep(VERIFY_WAIT_S)
+        self._log_press_state(host, button, "after Space")
+        if self._sheet_still_up(host, button):
+            return None
+        return "Space"
 
     def _approve(self, pid: int, host, button) -> str | None:
         """Dismiss the consent sheet. Returns how it fell, only once the sheet is
-        verified gone, and never by moving the pointer or activating Chrome."""
+        verified gone. Does not move the pointer or activate Chrome.
+
+        One AXPress, which is enough on Chrome 151. On Chrome 153 that returns
+        success without running Allow, so the keyboard follows - through a gate
+        that re-reads the pressed refs before every key, because the AXPress
+        can also take effect late (slow teardown under load) and a keystroke
+        after that has nowhere safe to land. A second AXPress is never sent:
+        it removes the sheet and leaves the socket unapproved, which reads as
+        success and is not. A sheet that survives both is retried next sweep.
+        """
+        seen_at = time.monotonic()
         self._raise_host(host)
         ax_ok = self._press(button) is not None
         time.sleep(VERIFY_WAIT_S)
+        self._log_press_state(host, button, "after first AXPress")
         if not self._sheet_still_up(host, button):
             return "AXPress" if ax_ok else "AXRaise"
 
-        # The load case: AXPress accepted, teardown slower than the wait. A
-        # longer AX timeout and a re-press clears it without any click.
-        if self._ax_retry(host, button):
-            return "AXPress-retry"
-
-        # Nothing synthetic beyond this point. A cursorless click was tried four
-        # ways - CGEventPostToPid bound to the sheet's window, to the browser
-        # window, with a preceding move, and unbound - and Chrome ignored every
-        # one, while a HID click moves the pointer, which this engine promises
-        # not to do. So a sheet that outlives the retries is reported and pressed
-        # again next sweep: the dedupe slot is dropped on FAILED, which makes
-        # this an unbounded AX retry at poll rate with a visible trail in the log.
-        return None
+        guard_left = ACTIVATION_GUARD_S - (time.monotonic() - seen_at)
+        if guard_left > 0:
+            time.sleep(guard_left)
+        return self._key_approve(pid, host, button, "AXPress" if ax_ok else "AXRaise")
 
     def _element_summary(self, element) -> str:
         """Return the AX identity and geometry used to audit a pending click."""
@@ -467,6 +728,7 @@ class Engine:
             for host in hosts:
                 try:
                     if not _is_visible(host):
+                        self.log("  sheet matched but not visible - not pressing", "AUDIT")
                         continue
                     labels = [b for b in self._button_labels(host) if b]
                     # A dismissed dialog lingers in the tree for a beat with its
@@ -474,11 +736,32 @@ class Engine:
                     # buttons is that teardown state, not a real prompt - skip it
                     # quietly so it neither logs noise nor burns a dedupe slot.
                     if not labels:
+                        self.log("  sheet matched but no button labels - not pressing", "AUDIT")
                         continue
 
                     key = self._dedupe_key(host)
+                    # A sheet is pressed only once it has stood for the
+                    # activation guard. Chrome 154, three clients queued: every
+                    # press made within a poll of the sheet appearing returned
+                    # success and did nothing, and every press made a second
+                    # later granted. A queued successor is drawn the instant
+                    # its predecessor goes and shares this key, so the clock
+                    # is reset on each verified approval below.
+                    if not self.observe:
+                        # Stamped here, not from the sweep's `now`: the AX walk
+                        # above can take 100ms or more, and the guard is
+                        # measured from when the sheet was actually seen.
+                        first = self._first_seen.get(key)
+                        if first is None:
+                            self._first_seen[key] = time.time()
+                            self.log(f"  sheet first seen key={key} - pressing once the "
+                                     f"activation guard has passed", "AUDIT")
+                            continue
+                        if time.time() - first < ACTIVATION_GUARD_S:
+                            continue
                     last = self._seen.get(key)
                     if last is not None and now - last < DEDUPE_SECONDS:
+                        self.log(f"  sheet deduped key={key} - not pressing", "AUDIT")
                         continue
                     self._seen[key] = now
 
@@ -507,11 +790,12 @@ class Engine:
                     # next sweep instead of sitting out the window.
                     self._seen.pop(key, None)
                     if how:
+                        self._first_seen.pop(key, None)
                         self.approved += 1
                         self.log(f"  APPROVED via {how}", "ACTION")
                         self.log(f"  total approved this session: {self.approved}")
                     else:
-                        self.log("  FAILED: sheet still up after AXPress and retries - pressing again next sweep", "ERROR")
+                        self.log("  FAILED: sheet not verified gone after AXPress and the keyboard path - retrying next sweep", "ERROR")
                 except Exception as exc:
                     self.log(f"  host error: {exc!r}", "ERROR")
 
@@ -519,6 +803,9 @@ class Engine:
         if len(self._seen) > DEDUPE_MAX:
             cutoff = now - 300
             self._seen = {k: v for k, v in self._seen.items() if v >= cutoff}
+        if len(self._first_seen) > DEDUPE_MAX:
+            cutoff = now - 300
+            self._first_seen = {k: v for k, v in self._first_seen.items() if v >= cutoff}
         if is_diagnostic_sweep:
             self.log("diagnostic sweep complete", "DIAG")
 

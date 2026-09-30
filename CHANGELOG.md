@@ -41,11 +41,109 @@ The macOS code is unchanged. The separate macOS Chrome 153 work in
 
 ### Thanks
 
-Thanks to [@crimsonsunset](https://github.com/crimsonsunset) for identifying these
-Windows issues, providing clear reproductions, and contributing the fixes in
+Thanks to [@Icather](https://github.com/Icather) (ChengLong Han) for identifying
+these Windows issues, providing clear reproductions, and contributing the fixes in
 [#2](https://github.com/dev-newb/yes-dev/pull/2) and
 [#3](https://github.com/dev-newb/yes-dev/pull/3). This update builds on that work
 with further fixes and testing. The original commits are preserved in its history.
+
+### macOS
+
+macOS on Chrome 153 and 154. The engine found the sheet, logged an approval, and
+Chrome granted nothing. Two separate bugs, both invisible from the log as it was.
+
+Thanks to [@crimsonsunset](https://github.com/crimsonsunset) for finding both,
+proving the false approvals with a websocket held open across the approval rather
+than trusting the sheet to vanish, and contributing the fix in
+[#4](https://github.com/dev-newb/yes-dev/pull/4). That commit is preserved in the
+history; the gates that follow came out of running it against Chrome 154.
+
+#### macOS: the sheet is there, the title is not
+
+Chrome 152 put "Allow remote debugging?" on the `AXSheet` itself. Chrome 153
+leaves `AXTitle` and `AXDescription` empty and moves the string to an `AXHeading`
+inside the sheet, so a title match found nothing while the prompt was on screen.
+An untitled dialog whose heading matches now counts as the host. The heading walk
+is capped at five levels and only runs for dialog-role children that are
+themselves untitled, so the idle scan still costs what 1.2.0 measured.
+
+#### macOS: AXPress is acknowledged and Allow never runs
+
+`AXPress` returns `kAXErrorSuccess` on this button and the button does not fire -
+Chrome's accessibility shim answers the action without dispatching it. Worse, the
+re-press that 1.2.0 added to cover slow teardown *removes the sheet* on 153 while
+leaving the debug socket unapproved. Both AX references go invalid, which is
+exactly the signal used to mean "dismissed", so every one of those was logged
+`APPROVED` with nothing granted. Verified by holding a CDP websocket open across
+the approval: the log said approved, the socket never opened.
+
+So the re-press is gone, and the fallback is a keystroke instead. `AXFocused` is
+an attribute write rather than a command dispatch, and Chrome honours it, so
+focus moves onto Allow; `Space` then goes to Chrome's pid via
+`CGEventPostToPid`, which delivers keyboard events even though it silently drops
+mouse events. Nine of nine approvals landed on Chrome 153.0.8010.48, each
+verified by a websocket reaching `OPEN` rather than by the sheet vanishing, at
+about 1.0 s from prompt to approval. The pointer does not move and the engine
+never activates Chrome. `pyobjc-framework-Quartz` is required again, for
+keyboard events only.
+
+One promise the engine cannot keep on Chrome's behalf: Chrome activates its own
+window when it shows this prompt. `DevToolsConnectionDialog` calls
+`browser->GetWindow()->Activate()` before the sheet is built, unconditionally,
+so the frontmost app becomes Chrome the moment a client connects, before the
+engine has seen anything. WindowServer's own log confirms it on every run, on
+the AXPress path and the keystroke path alike. The engine adds no activation
+of its own; the approval, by either route, leaves the frontmost app as it found
+it.
+
+A sheet that survives both is logged `FAILED` and retried next sweep, as before.
+There is still no synthetic mouse click anywhere in the engine.
+
+#### macOS: a sheet is pressed only once it has stood for the activation guard
+
+Chrome 154.0.8037.59, three clients queued, run hands-off: every `AXPress` made
+within a poll of the sheet appearing returned success and did nothing, and every
+press made a second later granted, each grant confirmed by the client's socket
+reaching `OPEN` and answering `Browser.getVersion`. That is Chromium's
+`InputEventActivationProtector`, which drops input for 500 ms after a
+security-sensitive dialog appears, and on 154 it covers `AXPress`. The engine now
+notes the sweep that first sees a sheet and presses it only once the guard has
+passed, measured from then. A queued successor shares the predecessor's dedupe key
+and is drawn the instant the predecessor goes, so the clock resets on each
+verified approval. Cost: at most one poll plus the guard of latency on a fresh
+sheet. `--once` therefore sees a sheet without pressing it; `--observe` is
+unaffected.
+
+On 154 the sheet is titled again (`AXTitle` "Allow remote debugging?", no heading
+needed); the heading path stays for 153.
+
+#### macOS: no keystroke without a live target, and no Tab walk without Keyboard navigation
+
+Every keystroke is gated on the pressed sheet still being the same live node:
+the references are re-read before the focus write, before each Tab and
+immediately before Space, which must also still find Allow focused. An `AXPress`
+that takes effect late would otherwise reach the keyboard path with the sheet
+already gone, walk Tabs into whatever Chrome focuses next, and log a real
+approval as `FAILED`, which the burst guard never counts. It is now reported as
+the approval it was, with no key sent. A sheet that stops answering gets no key
+either, and is retried next sweep.
+
+The keyboard fallback depends on Keyboard navigation (System Settings > Keyboard,
+bit 2 of `AppleKeyboardUIMode`), which is off by default. Chrome's dialogs follow
+it. On 154 with it off, the `AXFocused` write on Allow read back false every time
+and eighteen Tabs in eighteen attempts never reached the button; with it on, the
+focus write landed and Space granted, four of four across three queued clients
+and one with Chrome behind another app, each confirmed on the socket. With it off
+the Tab walk is skipped and the sheet is retried next sweep. On 154 the fallback
+is not reached at all once the press-age guard is in place.
+
+#### macOS: the log says which decision was made
+
+Every approval path now leaves a trail: each dialog-role candidate with its
+label, heading and accept decision; the `AXPress` error code; and the liveness
+and visibility of both references after each attempt. The false approvals above
+were indistinguishable from real ones in the old log, which is why they survived
+two releases.
 
 ## 1.2.0
 

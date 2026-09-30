@@ -9,3 +9,5 @@ pystray>=0.19; sys_platform == "win32"
 rumps>=0.4; sys_platform == "darwin"
 pyobjc-framework-Cocoa>=9.0; sys_platform == "darwin"
 pyobjc-framework-ApplicationServices>=9.0; sys_platform == "darwin"
+# Keyboard-only: CGEventPostToPid delivers keystrokes without moving the pointer.
+pyobjc-framework-Quartz>=9.0; sys_platform == "darwin"
