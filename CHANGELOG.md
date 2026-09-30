@@ -3,12 +3,32 @@
 Newest first. Each entry says what changed and, where it matters, what was
 measured - the numbers are from this repo's own runs, not estimates.
 
-## 1.2.1
+## Unreleased
 
-macOS on Chrome 153. The engine found the sheet, logged an approval, and Chrome
-granted nothing. Two separate bugs, both invisible from the log as it was.
+### Windows
 
-### macOS: the sheet is there, the title is not
+Fix Chrome and Edge process detection, add Simplified Chinese consent-dialog
+support, and improve the native approval fallback, counters, and log handling.
+See [#5](https://github.com/dev-newb/yes-dev/pull/5) for the changes and test results.
+
+Thanks to [@Icather](https://github.com/Icather) (ChengLong Han) for identifying
+these Windows issues, providing clear reproductions, and contributing the fixes in
+[#2](https://github.com/dev-newb/yes-dev/pull/2) and
+[#3](https://github.com/dev-newb/yes-dev/pull/3). This update builds on that work
+with further fixes and testing. The original commits are preserved in its history.
+
+### macOS
+
+macOS on Chrome 153 and 154. The engine found the sheet, logged an approval, and
+Chrome granted nothing. Two separate bugs, both invisible from the log as it was.
+
+Thanks to [@crimsonsunset](https://github.com/crimsonsunset) for finding both,
+proving the false approvals with a websocket held open across the approval rather
+than trusting the sheet to vanish, and contributing the fix in
+[#4](https://github.com/dev-newb/yes-dev/pull/4). That commit is preserved in the
+history; the gates that follow came out of running it against Chrome 154.
+
+#### macOS: the sheet is there, the title is not
 
 Chrome 152 put "Allow remote debugging?" on the `AXSheet` itself. Chrome 153
 leaves `AXTitle` and `AXDescription` empty and moves the string to an `AXHeading`
@@ -17,7 +37,7 @@ An untitled dialog whose heading matches now counts as the host. The heading wal
 is capped at five levels and only runs for dialog-role children that are
 themselves untitled, so the idle scan still costs what 1.2.0 measured.
 
-### macOS: AXPress is acknowledged and Allow never runs
+#### macOS: AXPress is acknowledged and Allow never runs
 
 `AXPress` returns `kAXErrorSuccess` on this button and the button does not fire -
 Chrome's accessibility shim answers the action without dispatching it. Worse, the
@@ -49,7 +69,7 @@ it.
 A sheet that survives both is logged `FAILED` and retried next sweep, as before.
 There is still no synthetic mouse click anywhere in the engine.
 
-### macOS: a sheet is pressed only once it has stood for the activation guard
+#### macOS: a sheet is pressed only once it has stood for the activation guard
 
 Chrome 154.0.8037.59, three clients queued, run hands-off: every `AXPress` made
 within a poll of the sheet appearing returned success and did nothing, and every
@@ -67,7 +87,7 @@ unaffected.
 On 154 the sheet is titled again (`AXTitle` "Allow remote debugging?", no heading
 needed); the heading path stays for 153.
 
-### macOS: no keystroke without a live target, and no Tab walk without Keyboard navigation
+#### macOS: no keystroke without a live target, and no Tab walk without Keyboard navigation
 
 Every keystroke is gated on the pressed sheet still being the same live node:
 the references are re-read before the focus write, before each Tab and
@@ -87,7 +107,7 @@ and one with Chrome behind another app, each confirmed on the socket. With it of
 the Tab walk is skipped and the sheet is retried next sweep. On 154 the fallback
 is not reached at all once the press-age guard is in place.
 
-### macOS: the log says which decision was made
+#### macOS: the log says which decision was made
 
 Every approval path now leaves a trail: each dialog-role candidate with its
 label, heading and accept decision; the `AXPress` error code; and the liveness

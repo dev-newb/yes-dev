@@ -41,9 +41,19 @@ param(
     [int]$IntervalMs = 250,
     [string]$LogPath = "$env:LOCALAPPDATA\YesDev\yes-dev.log",
     # Title of the consent dialog window.
-    [string]$DialogPattern = '(?i)^allow remote debugging\?$',
+    # The dialog title is LOCALISED. A zh-CN UI shows U+662F U+5426 U+5141 U+8BB8
+    # U+8FDC U+7A0B U+8C03 U+8BD5 followed by '?', so the original English-only
+    # pattern matched nothing there: the engine started, logged nothing further,
+    # and every attach timed out - a silent no-op.
+    # Chrome 154 zh-CN instead uses U+8981 ... U+5417 and a full-width '?'.
+    # Keep both observed titles exact; do not accept arbitrary consent text.
+    # The CJK is written as \uXXXX escapes on purpose. Windows PowerShell 5.1
+    # decodes .ps1 files as ANSI (GBK on a zh-CN system), so a literal CJK string
+    # here would become mojibake and the regex would still never match.
+    [string]$DialogPattern = '(?i)^(allow remote debugging\?|\u662F\u5426\u5141\u8BB8\u8FDC\u7A0B\u8C03\u8BD5\?|\u8981\u5141\u8BB8\u8FDC\u7A0B\u8C03\u8BD5\u5417\uFF1F)$',
     # Button to press. Anchored so "Turn off in settings" is never hit.
-    [string]$ApprovePattern = '(?i)^(allow|approve)$',
+    # zh-CN label is U+5141 U+8BB8 ; ASCII-only for the same reason as above.
+    [string]$ApprovePattern = '(?i)^(allow|approve|\u5141\u8BB8)$',
     [string[]]$BrowserProcess = @('chrome'),
     # Class of the window that hosts the dialog.
     [string]$WindowClass = 'Chrome_WidgetWin_1',
@@ -58,6 +68,18 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+
+# The tray starts us with `-BrowserProcess chrome,msedge`, and powershell.exe -File
+# hands arguments over as raw OS argv: a comma-separated string binds to [string[]]
+# as ONE element ("chrome,msedge"), not two. Get-Process -Name then looks for a
+# process literally called "chrome,msedge", finds none, and the PID guard below
+# skips every dialog - silently, because of -ErrorAction SilentlyContinue. Split on
+# commas here so a single string and a real array behave the same.
+$BrowserProcess = @(
+    $BrowserProcess | ForEach-Object { $_ -split ',' } |
+        ForEach-Object { $_.Trim() } | Where-Object { $_ }
+)
+
 Add-Type -AssemblyName UIAutomationClient
 Add-Type -AssemblyName UIAutomationTypes
 
@@ -110,22 +132,153 @@ public static class YesDevWin {
         return pid;
     }
 }
+
+// The .NET UIAutomationClient assembly has no LegacyIAccessiblePattern class.
+// Use the native COM pattern for this fallback. Interface order and GUIDs follow
+// the Windows SDK UIAutomationClient.idl. Unused slots keep the COM vtable layout;
+// only the explicitly typed methods below are called.
+[ComImport, Guid("30cbe57d-d9d0-452a-ab13-7ac5ac4825ee"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+interface IYesDevAutomation {
+    void UnusedCompareElements();
+    void UnusedCompareRuntimeIds();
+    void UnusedGetRootElement();
+    IYesDevElement ElementFromHandle(IntPtr hwnd);
+    void UnusedElementFromPoint();
+    void UnusedGetFocusedElement();
+    void UnusedGetRootElementBuildCache();
+    void UnusedElementFromHandleBuildCache();
+    void UnusedElementFromPointBuildCache();
+    void UnusedGetFocusedElementBuildCache();
+    void UnusedCreateTreeWalker();
+    void UnusedControlViewWalker();
+    void UnusedContentViewWalker();
+    void UnusedRawViewWalker();
+    void UnusedRawViewCondition();
+    void UnusedControlViewCondition();
+    void UnusedContentViewCondition();
+    void UnusedCreateCacheRequest();
+    void UnusedCreateTrueCondition();
+    void UnusedCreateFalseCondition();
+    IYesDevCondition CreatePropertyCondition(int propertyId, [MarshalAs(UnmanagedType.Struct)] object value);
+}
+
+[ComImport, Guid("352ffba8-0973-437c-a61f-f64cafd81df9"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+interface IYesDevCondition { }
+
+[ComImport, Guid("d22108aa-8ac5-49a5-837b-37bbb3d7591e"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+interface IYesDevElement {
+    void UnusedSetFocus();
+    [return: MarshalAs(UnmanagedType.SafeArray, SafeArraySubType = VarEnum.VT_I4)]
+    int[] GetRuntimeId();
+    IYesDevElement FindFirst(int scope, IYesDevCondition condition);
+    void UnusedFindAll();
+    void UnusedFindFirstBuildCache();
+    void UnusedFindAllBuildCache();
+    void UnusedBuildUpdatedCache();
+    [return: MarshalAs(UnmanagedType.Struct)]
+    object GetCurrentPropertyValue(int propertyId);
+    void UnusedGetCurrentPropertyValueEx();
+    void UnusedGetCachedPropertyValue();
+    void UnusedGetCachedPropertyValueEx();
+    void UnusedGetCurrentPatternAs();
+    void UnusedGetCachedPatternAs();
+    [return: MarshalAs(UnmanagedType.IUnknown)]
+    object GetCurrentPattern(int patternId);
+}
+
+[ComImport, Guid("828055ad-355b-4435-86d5-3b51c14a9b1b"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+interface IYesDevLegacyPattern {
+    void UnusedSelect();
+    void DoDefaultAction();
+}
+
+public static class YesDevLegacy {
+    const int RuntimeIdProperty = 30000;
+    const int ProcessIdProperty = 30002;
+    const int ControlTypeProperty = 30003;
+    const int NameProperty = 30005;
+    const int ButtonControlType = 50000;
+    const int LegacyPattern = 10018;
+    const int Descendants = 4;
+
+    public static bool Invoke(IntPtr dialog, int[] runtimeId, int processId, string name) {
+        if (dialog == IntPtr.Zero || runtimeId == null || runtimeId.Length == 0 || processId <= 0)
+            return false;
+        IYesDevAutomation automation = null;
+        IYesDevElement root = null, target = null;
+        IYesDevCondition condition = null;
+        object pattern = null;
+        try {
+            automation = (IYesDevAutomation)Activator.CreateInstance(Type.GetTypeFromCLSID(
+                new Guid("ff48dba4-60ef-4201-aa87-54103eef594e")));
+            root = automation.ElementFromHandle(dialog);
+            if (root == null || Convert.ToInt32(root.GetCurrentPropertyValue(ProcessIdProperty)) != processId)
+                return false;
+            // Search this dialog only, using the identity of the already-matched button.
+            condition = automation.CreatePropertyCondition(RuntimeIdProperty, runtimeId);
+            target = root.FindFirst(Descendants, condition);
+            if (target == null) return false;
+            int[] foundId = target.GetRuntimeId();
+            if (foundId == null || foundId.Length != runtimeId.Length) return false;
+            for (int i = 0; i < foundId.Length; i++)
+                if (foundId[i] != runtimeId[i]) return false;
+            if (Convert.ToInt32(target.GetCurrentPropertyValue(ProcessIdProperty)) != processId ||
+                Convert.ToInt32(target.GetCurrentPropertyValue(ControlTypeProperty)) != ButtonControlType ||
+                !String.Equals((string)target.GetCurrentPropertyValue(NameProperty), name, StringComparison.Ordinal))
+                return false;
+            pattern = target.GetCurrentPattern(LegacyPattern);
+            IYesDevLegacyPattern legacy = pattern as IYesDevLegacyPattern;
+            if (legacy == null) return false;
+            legacy.DoDefaultAction();
+            return true;
+        } finally {
+            // These RCWs belong to this call; no native pattern or element is cached.
+            Release(pattern);
+            Release(target);
+            Release(condition);
+            Release(root);
+            Release(automation);
+        }
+    }
+
+    static void Release(object value) {
+        if (value != null && Marshal.IsComObject(value)) Marshal.ReleaseComObject(value);
+    }
+}
 "@
 
 $logDir = Split-Path -Parent $LogPath
 if (-not (Test-Path $logDir)) { New-Item -ItemType Directory -Path $logDir -Force | Out-Null }
 
 function Write-Log {
-    param([string]$Message, [string]$Level = 'INFO')
+    param([string]$Message, [string]$Level = 'INFO', [switch]$RequireWrite)
     $line = "{0} [{1}] {2}" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss.fff'), $Level, $Message
-    Write-Host $line
-    try {
-        # One generation is plenty; an engine that runs for months must not fill the disk.
-        if ((Test-Path $LogPath) -and ((Get-Item $LogPath).Length -gt 1048576)) {
-            Move-Item -Path $LogPath -Destination "$LogPath.1" -Force
+    $bytes = [System.Text.Encoding]::UTF8.GetBytes($line + [Environment]::NewLine)
+    $written = $false
+    for ($attempt = 0; $attempt -lt 5; $attempt++) {
+        try {
+            # A reader can briefly prevent rotation. Keep appending and try the
+            # rotation again on the next record rather than dropping this event.
+            if ((Test-Path $LogPath) -and ((Get-Item $LogPath).Length -gt 1048576)) {
+                try { Move-Item -Path $LogPath -Destination "$LogPath.1" -Force -ErrorAction Stop }
+                catch { }
+            }
+            # Add-Content in Windows PowerShell can reject concurrent readers.
+            # Explicit sharing makes log tailing compatible with append/rotation.
+            $stream = [IO.File]::Open($LogPath, [IO.FileMode]::Append, [IO.FileAccess]::Write,
+                ([IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete))
+            try { $stream.Write($bytes, 0, $bytes.Length) }
+            finally { $stream.Dispose() }
+            $written = $true
+            break
+        } catch {
+            if ($attempt -lt 4) { Start-Sleep -Milliseconds 20 }
         }
-        Add-Content -Path $LogPath -Value $line -Encoding utf8
-    } catch { }
+    }
+    # A broken console must not retry an event that is already in the file.
+    if ($written) { try { Write-Host $line } catch { }; return }
+    try { Write-Host ("{0} [WARN] log write failed: {1}" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss.fff'), $LogPath) } catch { }
+    if ($RequireWrite) { throw 'Approval event could not be persisted' }
 }
 
 $AE      = [System.Windows.Automation.AutomationElement]
@@ -133,16 +286,23 @@ $TS      = [System.Windows.Automation.TreeScope]
 $CT      = [System.Windows.Automation.ControlType]
 $btnCond = New-Object System.Windows.Automation.PropertyCondition($AE::ControlTypeProperty, $CT::Button)
 
+function Invoke-LegacyElement {
+    param($Element, [IntPtr]$DialogHwnd)
+    return [YesDevLegacy]::Invoke($DialogHwnd, $Element.GetRuntimeId(),
+        $Element.Current.ProcessId, $Element.Current.Name)
+}
+
 function Invoke-Element {
-    param($Element)
+    param($Element, [IntPtr]$DialogHwnd)
     try {
         $Element.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
         return 'InvokePattern'
     } catch { }
     try {
-        $Element.GetCurrentPattern([System.Windows.Automation.LegacyIAccessiblePattern]::Pattern).DoDefaultAction()
-        return 'LegacyDoDefaultAction'
-    } catch { }
+        if (Invoke-LegacyElement -Element $Element -DialogHwnd $DialogHwnd) {
+            return 'LegacyDoDefaultAction'
+        }
+    } catch { Write-Log "  legacy fallback failed: $($_.Exception.Message)" 'WARN' }
     return $null
 }
 
@@ -160,7 +320,8 @@ function Find-DialogWindows {
 }
 
 # Approve one dialog window.
-# Returns 'approved' | 'failed' | 'observe' | 'nomatch'.
+# Returns 'pending' | 'failed' | 'observe' | 'nomatch'. A successful API call
+# is only an attempt: Chromium can ignore an action on a newly opened prompt.
 function Approve-Dialog {
     param([IntPtr]$Hwnd)
 
@@ -181,10 +342,59 @@ function Approve-Dialog {
     if ($Observe) { Write-Log "  observe mode - not clicking" 'OBSERVE'; return 'observe' }
     if (-not $target) { Write-Log "  no button matched /$ApprovePattern/ - left alone" 'WARN'; return 'nomatch' }
 
-    $how = Invoke-Element -Element $target
-    if ($how) { Write-Log "  APPROVED via $how" 'ACTION'; return 'approved' }
+    $buttonId = $target.GetRuntimeId()
+    $processId = [int][YesDevWin]::Pid($Hwnd)
+    $how = Invoke-Element -Element $target -DialogHwnd $Hwnd
+    if ($how) {
+        # Keep values only, never UI Automation elements or COM patterns.
+        $pendingKey = '{0}:{1}:{2}' -f $Hwnd, $processId, ($buttonId -join ',')
+        $pendingApprovals[$pendingKey] = @{
+            Hwnd = $Hwnd; ProcessId = $processId; ButtonId = $buttonId; Method = $how
+        }
+        Write-Log "  approval attempted via $how; waiting for dialog dismissal"
+        return 'pending'
+    }
     Write-Log "  FAILED to invoke Allow button" 'ERROR'
     return 'failed'
+}
+
+function Complete-PendingApprovals {
+    $completed = 0
+    foreach ($key in @($pendingApprovals.Keys)) {
+        $entry = $pendingApprovals[$key]
+        $dismissed = -not [YesDevWin]::IsWindowVisible($entry.Hwnd)
+        if (-not $dismissed) {
+            if ([int][YesDevWin]::Pid($entry.Hwnd) -ne $entry.ProcessId) {
+                $dismissed = $true
+            } else {
+                try {
+                    $host_ = $AE::FromHandle($entry.Hwnd)
+                    if (-not $host_) { continue }
+                    $identity = New-Object System.Windows.Automation.PropertyCondition(
+                        [System.Windows.Automation.AutomationElement]::RuntimeIdProperty,
+                        [int[]]$entry.ButtonId)
+                    # A new prompt can reuse the same HWND. Match the original
+                    # button identity so that it is counted and retried separately.
+                    $dismissed = $null -eq $host_.FindFirst($TS::Descendants, $identity)
+                } catch {
+                    # A transient accessibility error is not evidence of dismissal.
+                    continue
+                }
+            }
+        }
+        if ($dismissed) {
+            try {
+                Write-Log "  APPROVED via $($entry.Method); dialog dismissed (hwnd=$($entry.Hwnd))" 'ACTION' -RequireWrite
+            } catch {
+                # Keep the value-only record so that a later sweep can save it.
+                continue
+            }
+            $pendingApprovals.Remove($key)
+            $lastSeen.Remove([string]$entry.Hwnd)
+            $completed++
+        }
+    }
+    return $completed
 }
 
 # One engine is enough; a second would race the first onto the same dialog.
@@ -198,8 +408,10 @@ Write-Log "engine started (observe=$($Observe.IsPresent), interval=${IntervalMs}
 
 $approved   = 0
 $lastSeen   = @{}                    # hwnd -> last action, so one dialog is not clicked twice
+$pendingApprovals = @{}             # hwnd + button identity -> pending dismissal
 $procIds    = @()
 $pidsAt     = [datetime]::MinValue
+$procIdsWarned = $false              # report an unusable -BrowserProcess once, not never
 $lastTidy   = [datetime]::Now
 $self       = [System.Diagnostics.Process]::GetCurrentProcess()
 $parent     = $null
@@ -217,15 +429,33 @@ while ($true) {
             exit 0
         }
 
+        $usedAutomation = $pendingApprovals.Count -gt 0
+        $completed = Complete-PendingApprovals
+        if ($completed -gt 0) {
+            $approved += $completed
+            Write-Log "  total approved this session: $approved"
+        }
         $hwnds = Find-DialogWindows
 
         if ($hwnds.Count -gt 0) {
+            $usedAutomation = $true
             # Only now is the Chrome process list worth reading. Cached for a few
             # seconds either way: Get-Process allocates, and the set barely moves.
             if (((Get-Date) - $pidsAt).TotalSeconds -gt 5) {
                 $procIds = @(Get-Process -Name $BrowserProcess -ErrorAction SilentlyContinue |
                              Select-Object -ExpandProperty Id)
                 $pidsAt = Get-Date
+                # A dialog is on screen yet not one browser process matched: the name
+                # list is wrong and every window below falls through the PID guard.
+                # Say so once, instead of doing nothing in silence for days.
+                if ($procIds.Count -eq 0) {
+                    if (-not $procIdsWarned) {
+                        Write-Log "browser list matched no process: $($BrowserProcess -join '+')" 'WARN'
+                        $procIdsWarned = $true
+                    }
+                } else {
+                    $procIdsWarned = $false
+                }
             }
 
             foreach ($h in $hwnds) {
@@ -240,10 +470,7 @@ while ($true) {
                     $lastSeen[$key] = Get-Date
 
                     $result = Approve-Dialog -Hwnd $h
-                    if ($result -eq 'approved') {
-                        $approved++
-                        Write-Log "  total approved this session: $approved"
-                    } elseif ($result -eq 'failed') {
+                    if ($result -eq 'failed') {
                         # Don't sit on a dialog we failed to click; sweep it again
                         # immediately rather than waiting out the dedupe window.
                         $lastSeen.Remove($key)
@@ -251,6 +478,14 @@ while ($true) {
                 } catch { }
             }
 
+        }
+
+        $completed = Complete-PendingApprovals
+        if ($completed -gt 0) {
+            $approved += $completed
+            Write-Log "  total approved this session: $approved"
+        }
+        if ($usedAutomation) {
             # UI Automation elements are COM behind managed wrappers. Their memory
             # is native, so it exerts no pressure on the managed heap and nothing
             # would otherwise collect them. Only reached when a dialog appeared.
