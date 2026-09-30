@@ -329,7 +329,8 @@ function Approve-Dialog {
     $how = Invoke-Element -Element $target -DialogHwnd $Hwnd
     if ($how) {
         # Keep values only, never UI Automation elements or COM patterns.
-        $pendingApprovals[[string]$Hwnd] = @{
+        $pendingKey = '{0}:{1}:{2}' -f $Hwnd, $processId, ($buttonId -join ',')
+        $pendingApprovals[$pendingKey] = @{
             Hwnd = $Hwnd; ProcessId = $processId; ButtonId = $buttonId; Method = $how
         }
         Write-Log "  approval attempted via $how; waiting for dialog dismissal"
@@ -366,7 +367,7 @@ function Complete-PendingApprovals {
         if ($dismissed) {
             Write-Log "  APPROVED via $($entry.Method); dialog dismissed (hwnd=$($entry.Hwnd))" 'ACTION'
             $pendingApprovals.Remove($key)
-            $lastSeen.Remove($key)
+            $lastSeen.Remove([string]$entry.Hwnd)
             $completed++
         }
     }
@@ -384,7 +385,7 @@ Write-Log "engine started (observe=$($Observe.IsPresent), interval=${IntervalMs}
 
 $approved   = 0
 $lastSeen   = @{}                    # hwnd -> last action, so one dialog is not clicked twice
-$pendingApprovals = @{}             # hwnd -> value-only identity awaiting dismissal
+$pendingApprovals = @{}             # hwnd + button identity -> pending dismissal
 $procIds    = @()
 $pidsAt     = [datetime]::MinValue
 $procIdsWarned = $false              # report an unusable -BrowserProcess once, not never

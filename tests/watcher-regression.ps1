@@ -204,6 +204,16 @@ Test-Case 'Accessibility errors are not counted as dismissals' {
     Assert-Equal $approved 0 'No count from UIA error'
     Assert-Equal $pendingApprovals.Count 1 'Pending entry preserved'
 }
+Test-Case 'Queued dialogs sharing an HWND retain separate pending identities' {
+    $script:closeOnAction=$false
+    [void](Approve-Dialog -Hwnd ([IntPtr]11))
+    Set-Buttons @('Cancel','Allow')
+    [void](Approve-Dialog -Hwnd ([IntPtr]11))
+    Assert-Equal $pendingApprovals.Count 2 'Both attempted identities retained'
+    $window.Visible=$false
+    Assert-Equal (Complete-PendingApprovals) 2 'Both dismissals counted'
+    Assert-Equal (Complete-PendingApprovals) 0 'No duplicate completion'
+}
 $sha = [Security.Cryptography.SHA256]::Create()
 $sourceHash = [BitConverter]::ToString($sha.ComputeHash([IO.File]::ReadAllBytes($SourcePath))).Replace('-','')
 $sha.Dispose()

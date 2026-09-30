@@ -16,6 +16,8 @@ new, empty result directory. Results include JSON reports and the native test lo
   `powershell.exe -File`.
 - `tray-launch.py` extracts the real launch method and records process arguments.
   It never imports the app or starts a watcher.
+- `tray-log.py` tests complete and partial events, event-marker text inside other
+  log messages, replacement files, truncation, and bounded partial-line storage.
 - `legacy-native.ps1` compiles the original C# helper and operates a separate
   test process with real Windows controls and an explicit test UIA provider.
   It verifies native COM actions, both languages, process filtering, observe

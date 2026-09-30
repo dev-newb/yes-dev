@@ -61,7 +61,8 @@ try {
     $deadline=[datetime]::UtcNow.AddSeconds(12)
     $endpoint=$null
     while([datetime]::UtcNow -lt $deadline) {
-        $lines=[IO.File]::ReadAllLines($portFile)
+        try { $lines=[IO.File]::ReadAllLines($portFile) }
+        catch [IO.IOException] { Start-Sleep -Milliseconds 100; continue }
         if($lines.Length -ge 2 -and [int]$lines[0] -gt 0 -and $lines[1].StartsWith('/devtools/browser')) {
             $endpoint='ws://127.0.0.1:'+ $lines[0] + $lines[1]; break
         }

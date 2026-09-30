@@ -23,10 +23,13 @@ $argvTests | ConvertTo-Json -Depth 4 | Set-Content -Encoding utf8 (Join-Path $Re
 if(@($argvTests | Where-Object {-not $_.passed}).Count) { throw 'Argument binding tests failed' }
 & $Python (Join-Path $PSScriptRoot 'tray-launch.py') (Join-Path $ResultDirectory 'tray.json')
 if($LASTEXITCODE) { throw 'Tray launch tests failed' }
+& $Python (Join-Path $PSScriptRoot 'tray-log.py') (Join-Path $ResultDirectory 'tray-log.json')
+if($LASTEXITCODE) { throw 'Tray log-reader tests failed' }
 & $ps -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'run-private-desktop.ps1') -ScriptPath (Join-Path $PSScriptRoot 'legacy-native.ps1') -SourcePath $source -ResultDirectory (Join-Path $ResultDirectory 'native')
 if($LASTEXITCODE) { throw 'Native tests failed; inspect native/native-results.json' }
 $logic=Get-Content (Join-Path $ResultDirectory 'regression.json') -Raw | ConvertFrom-Json
 $tray=Get-Content (Join-Path $ResultDirectory 'tray.json') -Raw | ConvertFrom-Json
+$trayLog=Get-Content (Join-Path $ResultDirectory 'tray-log.json') -Raw | ConvertFrom-Json
 $native=Get-Content (Join-Path $ResultDirectory 'native\native-results.json') -Raw | ConvertFrom-Json
 $browserReports=@()
 if($IncludeBrowsers) {
@@ -50,9 +53,9 @@ if($IncludeBrowsers) {
 $browserPassed=0
 foreach($report in $browserReports) { $browserPassed += $report.passed }
 $summary=[pscustomobject]@{
-    passed=($logic.passed+$argvTests.Count+$tray.passed+$native.passed+$browserPassed)
+    passed=($logic.passed+$argvTests.Count+$tray.passed+$trayLog.passed+$native.passed+$browserPassed)
     failed=0
-    regression=$logic;arguments=$argvTests;tray=$tray;native=$native;browsers=$browserReports
+    regression=$logic;arguments=$argvTests;tray=$tray;tray_log=$trayLog;native=$native;browsers=$browserReports
     limits='Native controls supply a test UIA provider. Browser tests, when requested, use real browsers with fresh profiles on separate desktops. No long-duration memory test is performed.'
 }
 $summary | ConvertTo-Json -Depth 12 | Set-Content -Encoding utf8 (Join-Path $ResultDirectory 'summary.json')

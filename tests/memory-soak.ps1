@@ -24,7 +24,13 @@ function Save-Sample {
 }
 function Read-Count {
     if(-not (Test-Path -LiteralPath $logPath)) { return 0 }
-    $matches=[regex]::Matches([IO.File]::ReadAllText($logPath),'total approved this session: (\d+)')
+    $content=$null
+    for($attempt=0;$attempt -lt 10;$attempt++) {
+        try { $content=[IO.File]::ReadAllText($logPath);break }
+        catch [IO.IOException] { Start-Sleep -Milliseconds 20 }
+    }
+    if($null -eq $content) { throw 'Test log remained locked for 200 ms' }
+    $matches=[regex]::Matches($content,'total approved this session: (\d+)')
     if($matches.Count) { return [int]$matches[$matches.Count-1].Groups[1].Value }
     return 0
 }
@@ -61,7 +67,8 @@ try {
         [void]$browsers.Add($browser)
         $deadline=[datetime]::UtcNow.AddSeconds(12)
         while([datetime]::UtcNow -lt $deadline) {
-            $lines=[IO.File]::ReadAllLines($portFile)
+            try { $lines=[IO.File]::ReadAllLines($portFile) }
+            catch [IO.IOException] { Start-Sleep -Milliseconds 100; continue }
             if($lines.Length -ge 2 -and [int]$lines[0] -gt 0 -and $lines[1].StartsWith('/devtools/browser')) {
                 $browser.endpoint='ws://127.0.0.1:'+$lines[0]+$lines[1];break
             }
