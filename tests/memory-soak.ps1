@@ -26,13 +26,21 @@ function Read-Count {
     if(-not (Test-Path -LiteralPath $logPath)) { return 0 }
     $content=$null
     for($attempt=0;$attempt -lt 10;$attempt++) {
-        try { $content=[IO.File]::ReadAllText($logPath);break }
+        try {
+            # ReadAllText uses FileShare.Read and can prevent Add-Content from
+            # writing a record. The observer must permit the engine's writes.
+            $stream=[IO.File]::Open($logPath,[IO.FileMode]::Open,[IO.FileAccess]::Read,
+                ([IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete))
+            $reader=New-Object IO.StreamReader($stream,[Text.Encoding]::UTF8,$true)
+            try { $content=$reader.ReadToEnd() } finally { $reader.Dispose() }
+            break
+        }
         catch [IO.IOException] { Start-Sleep -Milliseconds 20 }
     }
     if($null -eq $content) { throw 'Test log remained locked for 200 ms' }
-    $matches=[regex]::Matches($content,'total approved this session: (\d+)')
-    if($matches.Count) { return [int]$matches[$matches.Count-1].Groups[1].Value }
-    return 0
+    # Count complete ACTION events, exactly what the tray consumes, rather than
+    # a secondary human-readable summary line.
+    return [regex]::Matches($content,'(?m)^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3} \[ACTION\] [^\r\n]*\r?\n').Count
 }
 try {
     $source=[IO.File]::ReadAllText($SourcePath)

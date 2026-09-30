@@ -7,6 +7,8 @@ import sys
 directory = Path(sys.argv[1])
 report = json.loads((directory / 'soak-results.json').read_text(encoding='utf-8-sig'))
 samples = [json.loads(line) for line in (directory / 'samples.jsonl').read_text().splitlines()]
+log = (directory / 'watcher.log').read_text(encoding='utf-8-sig')
+action_events = sum(line.split(maxsplit=3)[2:3] == ['[ACTION]'] for line in log.splitlines())
 MIB = 1024 * 1024
 
 def slope_per_minute(rows, key):
@@ -41,6 +43,7 @@ checks = {
     'at_least_30_minutes': end >= 1800,
     'no_failed_connections': report['failed_connections'] == 0,
     'one_count_per_connection': report['counted_dialogs'] == report['successful_connections'],
+    'persisted_events_match_connections': action_events == report['successful_connections'],
     'at_least_100_connections': report['successful_connections'] >= 100,
     'same_watcher_process': len({r['watcher_pid'] for r in samples}) == 1,
     'below_400_mib_ceiling': max(r['private_bytes'] for r in samples) < 400 * MIB,
@@ -55,6 +58,7 @@ analysis = {
     'peak_working_set_mib': max(r['working_set_bytes'] for r in samples) / MIB,
     'successful_connections': report['successful_connections'],
     'counted_dialogs': report['counted_dialogs'],
+    'persisted_action_events': action_events,
     'limits': {'private_growth_mib': 16, 'private_slope_mib_per_minute': 0.5, 'handle_growth': 64},
 }
 (directory / 'analysis.json').write_text(json.dumps(analysis, indent=2))

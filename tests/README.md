@@ -68,6 +68,9 @@ waits through the idle phase, and then requests a new CDP connection every five
 seconds. Every successful request must produce exactly one counted dismissal.
 
 Samples record watcher private bytes, working set, handles and CPU time every
-five seconds. The driver stops the watcher and its test browsers at the end.
+five seconds. The log observer opens the file with shared read/write/delete
+access and counts complete ACTION records, rather than the separate summary
+message. `soak-log-reader.ps1` tests this while a writer holds the file open.
+The driver stops the watcher and its test browsers at the end.
 `analyze-soak.py` evaluates the completed samples. A successful finite soak is
 evidence for that workload and duration, not a guarantee for an indefinite run.
