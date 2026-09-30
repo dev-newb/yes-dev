@@ -245,13 +245,15 @@ def _has_dialog_heading(element, depth: int = 0) -> bool:
     return False
 
 
-def _full_keyboard_access() -> bool:
-    """Whether Tab moves focus between buttons on this Mac.
+def _keyboard_navigation() -> bool:
+    """Whether Tab moves focus between controls on this Mac.
 
     System Settings > Keyboard > Keyboard navigation, stored as bit 2 of
-    AppleKeyboardUIMode, off by default. Chrome's dialogs follow it: with it
-    off a button is reachable by click and by AX but not by Tab, so a Tab walk
-    can never land on Allow and every Tab sent is a wasted keystroke.
+    AppleKeyboardUIMode, off by default. (Not the Accessibility pane's Full
+    Keyboard Access, which is a separate feature.) Chrome's dialogs follow it.
+    Measured on Chrome 154: with it off, the AXFocused write on Allow reads back
+    false and Tab never reaches the button, so neither keyboard route can work;
+    with it on, the focus write lands and Space grants.
 
     @returns True when Tab can reach buttons.
     """
@@ -626,9 +628,9 @@ class Engine:
         if state != "live":
             return self._no_key(state, "before the focus write", pressed)
         if not self._focus_button(button):
-            if not _full_keyboard_access():
-                self.log("  Tab walk skipped: Full Keyboard Access is off, so Tab cannot "
-                         "reach a button in a Chrome dialog", "AUDIT")
+            if not _keyboard_navigation():
+                self.log("  Tab walk skipped: Keyboard navigation (System Settings > Keyboard) "
+                         "is off, so Tab cannot reach a button in a Chrome dialog", "AUDIT")
                 return None
             for stop in range(MAX_TAB_STOPS):
                 state = self._sheet_state(host, button)

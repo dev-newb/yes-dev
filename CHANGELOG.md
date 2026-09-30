@@ -58,7 +58,7 @@ unaffected.
 On 154 the sheet is titled again (`AXTitle` "Allow remote debugging?", no heading
 needed); the heading path stays for 153.
 
-### macOS: no keystroke without a live target, and no Tab walk without Full Keyboard Access
+### macOS: no keystroke without a live target, and no Tab walk without Keyboard navigation
 
 Every keystroke is gated on the pressed sheet still being the same live node:
 the references are re-read before the focus write, before each Tab and
@@ -69,11 +69,14 @@ approval as `FAILED`, which the burst guard never counts. It is now reported as
 the approval it was, with no key sent. A sheet that stops answering gets no key
 either, and is retried next sweep.
 
-The Tab walk runs only when Full Keyboard Access (System Settings > Keyboard >
-Keyboard navigation) is on. Chrome's dialogs follow that setting, and it is off
-by default: on 154 with it off, eighteen Tabs in eighteen attempts never moved
-focus to Allow, and the `AXFocused` write read back false every time. With it
-off the walk is skipped and the sheet is retried next sweep.
+The keyboard fallback depends on Keyboard navigation (System Settings > Keyboard,
+bit 2 of `AppleKeyboardUIMode`), which is off by default. Chrome's dialogs follow
+it. On 154 with it off, the `AXFocused` write on Allow read back false every time
+and eighteen Tabs in eighteen attempts never reached the button; with it on, the
+focus write landed and Space granted, four of four across three queued clients
+and one with Chrome behind another app, each confirmed on the socket. With it off
+the Tab walk is skipped and the sheet is retried next sweep. On 154 the fallback
+is not reached at all once the press-age guard is in place.
 
 ### macOS: the log says which decision was made
 
