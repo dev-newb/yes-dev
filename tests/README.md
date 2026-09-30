@@ -34,6 +34,10 @@ Edge browsers in English and Simplified Chinese, add `-IncludeBrowsers`:
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File tests/run-windows-tests.ps1 -IncludeBrowsers
 ```
 
+Add `-BurstSize 4` to open four simultaneous connections in each browser/language
+and invocation-mode case. All four handshakes must complete, each must answer a
+CDP version request, and the watcher must emit exactly four counter events.
+
 The browser tests use fresh profiles under the result directory and separate
 Windows desktops. They set the remote-debugging preference only in these test
 profiles, request a free loopback port, and require a real consent dialog and a

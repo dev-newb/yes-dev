@@ -1,7 +1,9 @@
 param([string]$SourcePath,[string]$ResultDirectory)
 $ErrorActionPreference='Stop'
 $config=Get-Content (Join-Path $ResultDirectory 'config.json') -Raw | ConvertFrom-Json
-$browser=$null; $socket=$null; $results=New-Object System.Collections.ArrayList
+$browser=$null; $socket=$null; $sockets=@(); $results=New-Object System.Collections.ArrayList
+$burstSize=if($config.burst_size){[int]$config.burst_size}else{1}
+if($burstSize -lt 1 -or $burstSize -gt 8) { throw 'burst_size must be between 1 and 8' }
 $logs=New-Object System.Collections.ArrayList
 $candidateTitles=@{}
 try {
@@ -82,13 +84,17 @@ try {
         $Observe=$false; $parent=$null; $approved=0; $lastSeen=@{}; $procIds=@(); $pidsAt=[datetime]::MinValue
         $pendingApprovals=@{}
         $lastTidy=[datetime]::Now; $procIdsWarned=$false; $IntervalMs=100
-        $socket=New-Object Net.WebSockets.ClientWebSocket
         $cancel=New-Object Threading.CancellationTokenSource
-        $cancel.CancelAfter(12000)
-        $connect=$socket.ConnectAsync([uri]$endpoint,$cancel.Token)
+        $cancel.CancelAfter(20000)
+        $sockets=@();$connects=@()
+        for($request=0;$request -lt $burstSize;$request++) {
+            $socket=New-Object Net.WebSockets.ClientWebSocket
+            $sockets += $socket
+            $connects += $socket.ConnectAsync([uri]$endpoint,$cancel.Token)
+        }
         $sawDialog=$false; $actions=0; $titles=@(); $labels=@(); $lastAction=[datetime]::MinValue
         $logStart=$logs.Count
-        while(-not $connect.IsCompleted) {
+        while(@($connects | Where-Object {-not $_.IsCompleted}).Count -gt 0) {
             foreach($candidate in [YesDevWin]::VisibleOfClass($WindowClass)) {
                 if([YesDevWin]::Pid($candidate) -eq $browser.Id) {
                     $candidateTitles[[YesDevWin]::Title($candidate)]=$true
@@ -105,32 +111,35 @@ try {
             }
             . $sweep
         }
-        $connect.GetAwaiter().GetResult()
-        if(-not $sawDialog -or $socket.State -ne 'Open') { throw 'Connection did not prove consent-dialog approval' }
+        foreach($connect in $connects) { $connect.GetAwaiter().GetResult() }
+        if(-not $sawDialog -or @($sockets | Where-Object {$_.State -ne 'Open'}).Count -gt 0) { throw 'Connection did not prove consent-dialog approval' }
         if($config.language -eq 'zh-CN' -and -not ($titles -match '[\u4e00-\u9fff]')) { throw 'The requested Chinese UI language was not observed' }
-        $bytes=[Text.Encoding]::UTF8.GetBytes('{"id":1,"method":"Browser.getVersion"}')
-        $socket.SendAsync([ArraySegment[byte]]::new($bytes),[Net.WebSockets.WebSocketMessageType]::Text,$true,$cancel.Token).GetAwaiter().GetResult()
-        $buffer=New-Object byte[] 8192
-        $received=$socket.ReceiveAsync([ArraySegment[byte]]::new($buffer),$cancel.Token).GetAwaiter().GetResult()
-        $response=[Text.Encoding]::UTF8.GetString($buffer,0,$received.Count) | ConvertFrom-Json
-        if(-not $response.result.product) { throw 'Browser.getVersion returned no product' }
+        foreach($socket in $sockets) {
+            $bytes=[Text.Encoding]::UTF8.GetBytes('{"id":1,"method":"Browser.getVersion"}')
+            $socket.SendAsync([ArraySegment[byte]]::new($bytes),[Net.WebSockets.WebSocketMessageType]::Text,$true,$cancel.Token).GetAwaiter().GetResult()
+            $buffer=New-Object byte[] 8192
+            $received=$socket.ReceiveAsync([ArraySegment[byte]]::new($buffer),$cancel.Token).GetAwaiter().GetResult()
+            $response=[Text.Encoding]::UTF8.GetString($buffer,0,$received.Count) | ConvertFrom-Json
+            if(-not $response.result.product) { throw 'Browser.getVersion returned no product' }
+        }
         $countDeadline=[datetime]::UtcNow.AddSeconds(2)
         while($pendingApprovals.Count -gt 0 -and [datetime]::UtcNow -lt $countDeadline) { . $sweep }
         $requestLogs=@($logs | Select-Object -Skip $logStart)
         $actionEvents=@($requestLogs | Where-Object {$_ -like 'ACTION:*'}).Count
         $actions=@($requestLogs | Where-Object {$_ -like '*approval attempted via LegacyDoDefaultAction*'}).Count
-        if($approved -ne 1 -or $actionEvents -ne 1 -or $pendingApprovals.Count -ne 0) {
-            throw "One connection must count once: approvals=$approved events=$actionEvents pending=$($pendingApprovals.Count)"
+        if($approved -ne $burstSize -or $actionEvents -ne $burstSize -or $pendingApprovals.Count -ne 0) {
+            throw "Each connection must count once: connections=$burstSize approvals=$approved events=$actionEvents pending=$($pendingApprovals.Count)"
         }
         if($mode -eq 'forced-fallback' -and $actions -lt 1) { throw 'Fallback path was not exercised' }
-        [void]$results.Add([pscustomobject]@{mode=$mode;passed=$true;product=$response.result.product;dialog_titles=@($titles | Select-Object -Unique);button_labels=$labels;logged_approvals=$approved;native_fallback_actions=$actions})
-        $socket.Abort(); $socket.Dispose(); $socket=$null; $cancel.Dispose()
+        [void]$results.Add([pscustomobject]@{mode=$mode;passed=$true;connections=$burstSize;product=$response.result.product;dialog_titles=@($titles | Select-Object -Unique);button_labels=$labels;logged_approvals=$approved;native_fallback_actions=$actions})
+        foreach($socket in $sockets) { $socket.Abort();$socket.Dispose() }
+        $sockets=@();$socket=$null;$cancel.Dispose()
         Start-Sleep -Milliseconds 200
     }
 } catch {
     [void]$results.Add([pscustomobject]@{mode='browser-test';passed=$false;error=($_ | Out-String)})
 } finally {
-    if($socket) { $socket.Abort(); $socket.Dispose() }
+    foreach($socket in $sockets) { $socket.Abort();$socket.Dispose() }
     if($browser -and -not $browser.HasExited) {
         # Only the PID returned when this test started its fresh-profile browser.
         & "$env:WINDIR\System32\taskkill.exe" /PID $browser.Id /T /F | Out-Null

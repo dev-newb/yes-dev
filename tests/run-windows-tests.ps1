@@ -1,7 +1,8 @@
 param(
     [string]$ResultDirectory = (Join-Path $env:TEMP ('yes-dev-tests-' + [guid]::NewGuid().ToString('N'))),
     [string]$Python = 'python',
-    [switch]$IncludeBrowsers
+    [switch]$IncludeBrowsers,
+    [ValidateRange(1,8)][int]$BurstSize=1
 )
 $ErrorActionPreference='Stop'
 $ResultDirectory=[IO.Path]::GetFullPath($ResultDirectory)
@@ -42,8 +43,8 @@ if($IncludeBrowsers) {
         foreach($language in @('en-US','zh-CN')) {
             $directory=Join-Path $ResultDirectory ($browser.browser.ToLower()+'-'+$language)
             New-Item -ItemType Directory -Path $directory -Force | Out-Null
-            @{browser=$browser.browser;executable=$browser.executable;language=$language} | ConvertTo-Json | Set-Content -Encoding utf8 (Join-Path $directory 'config.json')
-            & $ps -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'run-private-desktop.ps1') -ScriptPath (Join-Path $PSScriptRoot 'browser-private.ps1') -SourcePath $source -ResultDirectory $directory
+            @{browser=$browser.browser;executable=$browser.executable;language=$language;burst_size=$BurstSize} | ConvertTo-Json | Set-Content -Encoding utf8 (Join-Path $directory 'config.json')
+            & $ps -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'run-private-desktop.ps1') -ScriptPath (Join-Path $PSScriptRoot 'browser-private.ps1') -SourcePath $source -ResultDirectory $directory -TimeoutSeconds 90
             if($LASTEXITCODE) { throw "Browser test failed: $($browser.browser), $language" }
             $browserReports += Get-Content (Join-Path $directory 'browser-results.json') -Raw | ConvertFrom-Json
             Write-Output "$($browser.browser) ${language}: normal and native fallback connections passed"
