@@ -40,14 +40,40 @@ required again, for keyboard events only.
 A sheet that survives both is logged `FAILED` and retried next sweep, as before.
 There is still no synthetic mouse click anywhere in the engine.
 
+### macOS: a sheet is pressed only once it has stood for the activation guard
+
+Chrome 154.0.8037.59, three clients queued, run hands-off: every `AXPress` made
+within a poll of the sheet appearing returned success and did nothing, and every
+press made a second later granted, each grant confirmed by the client's socket
+reaching `OPEN` and answering `Browser.getVersion`. That is Chromium's
+`InputEventActivationProtector`, which drops input for 500 ms after a
+security-sensitive dialog appears, and on 154 it covers `AXPress`. The engine now
+notes the sweep that first sees a sheet and presses it only once the guard has
+passed, measured from then. A queued successor shares the predecessor's dedupe key
+and is drawn the instant the predecessor goes, so the clock resets on each
+verified approval. Cost: at most one poll plus the guard of latency on a fresh
+sheet. `--once` therefore sees a sheet without pressing it; `--observe` is
+unaffected.
+
+On 154 the sheet is titled again (`AXTitle` "Allow remote debugging?", no heading
+needed); the heading path stays for 153.
+
+### macOS: no keystroke without a live target, and no Tab walk without Full Keyboard Access
+
 Every keystroke is gated on the pressed sheet still being the same live node:
 the references are re-read before the focus write, before each Tab and
 immediately before Space, which must also still find Allow focused. An `AXPress`
-that takes effect late - slow teardown under load, seen twice in the 1.2.0 runs -
-would otherwise reach the keyboard path with the sheet already gone, walk Tabs
-into whatever Chrome focuses next, and log a real approval as `FAILED`, which the
-burst guard never counts. It is now reported as the approval it was, with no key
-sent. A sheet that stops answering gets no key either, and is retried next sweep.
+that takes effect late would otherwise reach the keyboard path with the sheet
+already gone, walk Tabs into whatever Chrome focuses next, and log a real
+approval as `FAILED`, which the burst guard never counts. It is now reported as
+the approval it was, with no key sent. A sheet that stops answering gets no key
+either, and is retried next sweep.
+
+The Tab walk runs only when Full Keyboard Access (System Settings > Keyboard >
+Keyboard navigation) is on. Chrome's dialogs follow that setting, and it is off
+by default: on 154 with it off, eighteen Tabs in eighteen attempts never moved
+focus to Allow, and the `AXFocused` write read back false every time. With it
+off the walk is skipped and the sheet is retried next sweep.
 
 ### macOS: the log says which decision was made
 

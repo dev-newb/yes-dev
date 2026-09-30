@@ -77,7 +77,7 @@ try:
         kAXValueCGPointType,
         kAXValueCGSizeType,
     )
-    from AppKit import NSRunningApplication, NSWorkspace
+    from AppKit import NSRunningApplication, NSUserDefaults, NSWorkspace
     from Quartz import CGEventCreateKeyboardEvent, CGEventPostToPid
 except ImportError:
     sys.exit(
@@ -136,7 +136,10 @@ VERIFY_WAIT_S = 0.5
 VK_TAB = 0x30
 VK_SPACE = 0x31
 # Chromium's InputEventActivationProtector drops input within 500ms of a
-# security-sensitive dialog appearing, so a keystroke has to wait that out.
+# security-sensitive dialog appearing. On Chrome 154 that covers AXPress too:
+# a press inside the window returns success and does nothing, and only a later
+# press clears the sheet. So both the first press and any keystroke wait it
+# out, measured from the sweep that first saw the sheet.
 ACTIVATION_GUARD_S = 0.6
 # Tab stops to walk looking for Allow: three buttons plus slack.
 MAX_TAB_STOPS = 6
@@ -242,6 +245,23 @@ def _has_dialog_heading(element, depth: int = 0) -> bool:
     return False
 
 
+def _full_keyboard_access() -> bool:
+    """Whether Tab moves focus between buttons on this Mac.
+
+    System Settings > Keyboard > Keyboard navigation, stored as bit 2 of
+    AppleKeyboardUIMode, off by default. Chrome's dialogs follow it: with it
+    off a button is reachable by click and by AX but not by Tab, so a Tab walk
+    can never land on Allow and every Tab sent is a wasted keystroke.
+
+    @returns True when Tab can reach buttons.
+    """
+    try:
+        mode = NSUserDefaults.standardUserDefaults().integerForKey_("AppleKeyboardUIMode")
+    except Exception:
+        return False
+    return bool(int(mode) & 2)
+
+
 def _is_visible(element) -> bool:
     """Skip hidden/offscreen elements: a dismissed dialog lingers briefly in the
     tree and would otherwise be approved a second time."""
@@ -268,6 +288,7 @@ class Engine:
         self._parent_pid = os.getppid()
         self._seen: dict[str, float] = {}    # dedupe key -> last-press wall clock
         self._audited: set[tuple] = set()    # sheet-candidate decisions already logged
+        self._first_seen: dict[str, float] = {}  # dedupe key -> sweep clock when first seen
         self._next_diagnostic_at = 0.0
 
     # -------- logging: byte-for-byte the format the tray parses --------
@@ -605,6 +626,10 @@ class Engine:
         if state != "live":
             return self._no_key(state, "before the focus write", pressed)
         if not self._focus_button(button):
+            if not _full_keyboard_access():
+                self.log("  Tab walk skipped: Full Keyboard Access is off, so Tab cannot "
+                         "reach a button in a Chrome dialog", "AUDIT")
+                return None
             for stop in range(MAX_TAB_STOPS):
                 state = self._sheet_state(host, button)
                 if state != "live":
@@ -713,6 +738,22 @@ class Engine:
                         continue
 
                     key = self._dedupe_key(host)
+                    # A sheet is pressed only once it has stood for the
+                    # activation guard. Chrome 154, three clients queued: every
+                    # press made within a poll of the sheet appearing returned
+                    # success and did nothing, and every press made a second
+                    # later granted. A queued successor is drawn the instant
+                    # its predecessor goes and shares this key, so the clock
+                    # is reset on each verified approval below.
+                    if not self.observe:
+                        first = self._first_seen.get(key)
+                        if first is None:
+                            self._first_seen[key] = now
+                            self.log(f"  sheet first seen key={key} - pressing once the "
+                                     f"activation guard has passed", "AUDIT")
+                            continue
+                        if now - first < ACTIVATION_GUARD_S:
+                            continue
                     last = self._seen.get(key)
                     if last is not None and now - last < DEDUPE_SECONDS:
                         self.log(f"  sheet deduped key={key} - not pressing", "AUDIT")
@@ -744,6 +785,7 @@ class Engine:
                     # next sweep instead of sitting out the window.
                     self._seen.pop(key, None)
                     if how:
+                        self._first_seen.pop(key, None)
                         self.approved += 1
                         self.log(f"  APPROVED via {how}", "ACTION")
                         self.log(f"  total approved this session: {self.approved}")
@@ -756,6 +798,9 @@ class Engine:
         if len(self._seen) > DEDUPE_MAX:
             cutoff = now - 300
             self._seen = {k: v for k, v in self._seen.items() if v >= cutoff}
+        if len(self._first_seen) > DEDUPE_MAX:
+            cutoff = now - 300
+            self._first_seen = {k: v for k, v in self._first_seen.items() if v >= cutoff}
         if is_diagnostic_sweep:
             self.log("diagnostic sweep complete", "DIAG")
 
