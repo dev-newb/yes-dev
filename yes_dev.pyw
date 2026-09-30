@@ -239,7 +239,7 @@ class YesDev:
             self._read_log()
 
     def _read_log(self) -> None:
-        # Binary, not text: the engine's log is UTF-8-with-BOM and CRLF, and byte
+        # Binary, not text: UTF-8 logs can have a BOM and CRLF, and byte
         # offsets from stat() are only meaningful against a binary stream.
         try:
             with LOG_PATH.open("rb") as fh:

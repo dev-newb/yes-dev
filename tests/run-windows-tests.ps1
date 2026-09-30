@@ -26,11 +26,17 @@ if(@($argvTests | Where-Object {-not $_.passed}).Count) { throw 'Argument bindin
 if($LASTEXITCODE) { throw 'Tray launch tests failed' }
 & $Python (Join-Path $PSScriptRoot 'tray-log.py') (Join-Path $ResultDirectory 'tray-log.json')
 if($LASTEXITCODE) { throw 'Tray log-reader tests failed' }
+& $ps -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'log-writer.ps1') -SourcePath $source -OutputPath (Join-Path $ResultDirectory 'log-writer.json')
+if($LASTEXITCODE) { throw 'Concurrent log-writer tests failed' }
+& $ps -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'soak-log-reader.ps1') -OutputPath (Join-Path $ResultDirectory 'observer.json')
+if($LASTEXITCODE) { throw 'Soak observer tests failed' }
 & $ps -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'run-private-desktop.ps1') -ScriptPath (Join-Path $PSScriptRoot 'legacy-native.ps1') -SourcePath $source -ResultDirectory (Join-Path $ResultDirectory 'native')
 if($LASTEXITCODE) { throw 'Native tests failed; inspect native/native-results.json' }
 $logic=Get-Content (Join-Path $ResultDirectory 'regression.json') -Raw | ConvertFrom-Json
 $tray=Get-Content (Join-Path $ResultDirectory 'tray.json') -Raw | ConvertFrom-Json
 $trayLog=Get-Content (Join-Path $ResultDirectory 'tray-log.json') -Raw | ConvertFrom-Json
+$logWriter=Get-Content (Join-Path $ResultDirectory 'log-writer.json') -Raw | ConvertFrom-Json
+$observer=Get-Content (Join-Path $ResultDirectory 'observer.json') -Raw | ConvertFrom-Json
 $native=Get-Content (Join-Path $ResultDirectory 'native\native-results.json') -Raw | ConvertFrom-Json
 $browserReports=@()
 if($IncludeBrowsers) {
@@ -54,9 +60,9 @@ if($IncludeBrowsers) {
 $browserPassed=0
 foreach($report in $browserReports) { $browserPassed += $report.passed }
 $summary=[pscustomobject]@{
-    passed=($logic.passed+$argvTests.Count+$tray.passed+$trayLog.passed+$native.passed+$browserPassed)
+    passed=($logic.passed+$argvTests.Count+$tray.passed+$trayLog.passed+$logWriter.passed+$observer.passed+$native.passed+$browserPassed)
     failed=0
-    regression=$logic;arguments=$argvTests;tray=$tray;tray_log=$trayLog;native=$native;browsers=$browserReports
+    regression=$logic;arguments=$argvTests;tray=$tray;tray_log=$trayLog;log_writer=$logWriter;observer=$observer;native=$native;browsers=$browserReports
     limits='Native controls supply a test UIA provider. Browser tests, when requested, use real browsers with fresh profiles on separate desktops. No long-duration memory test is performed.'
 }
 $summary | ConvertTo-Json -Depth 12 | Set-Content -Encoding utf8 (Join-Path $ResultDirectory 'summary.json')

@@ -68,7 +68,11 @@ $zhSettings = [regex]::Unescape('\u5728\u8bbe\u7f6e\u4e2d\u5173\u95ed')
 function Assert-Equal($Actual, $Expected, $Message) {
     if ($Actual -ne $Expected) { throw "$Message : expected=$Expected actual=$Actual" }
 }
-function Write-Log { param($Message, $Level='INFO'); [void]$script:messages.Add("${Level}:$Message") }
+function Write-Log {
+    param($Message, $Level='INFO', [switch]$RequireWrite)
+    if($RequireWrite -and $script:failLog) { throw 'Simulated log write failure' }
+    [void]$script:messages.Add("${Level}:$Message")
+}
 function Start-Sleep { param($Milliseconds) }
 # The native COM bridge has a separate test against a real Windows control.
 function Invoke-LegacyElement {
@@ -113,7 +117,7 @@ function Reset-Case {
     $script:messages = New-Object System.Collections.ArrayList
     $script:processTable = @{chrome=101; msedge=202}
     $script:clicks = 0; $script:failInvoke = $false; $script:failLegacy = $false
-    $script:nextButtonId=0; $script:closeOnAction=$true; $script:failFindFirst=$false
+    $script:nextButtonId=0; $script:closeOnAction=$true; $script:failFindFirst=$false; $script:failLog=$false
     $script:action = [pscustomobject]@{}
     $script:action | Add-Member ScriptMethod Invoke { $script:clicks++; if($script:closeOnAction) {$script:window.Visible=$false} }
     $script:action | Add-Member ScriptMethod DoDefaultAction { $script:clicks++; if($script:closeOnAction) {$script:window.Visible=$false} }
@@ -213,6 +217,14 @@ Test-Case 'Queued dialogs sharing an HWND retain separate pending identities' {
     $window.Visible=$false
     Assert-Equal (Complete-PendingApprovals) 2 'Both dismissals counted'
     Assert-Equal (Complete-PendingApprovals) 0 'No duplicate completion'
+}
+Test-Case 'Failed event persistence retains pending confirmation for retry' {
+    $script:failLog=$true; . $sweep
+    Assert-Equal $approved 0 'No count before persistence'
+    Assert-Equal $pendingApprovals.Count 1 'Unwritten event retained'
+    $script:failLog=$false; . $sweep; . $sweep
+    Assert-Equal $approved 1 'Persisted once after recovery'
+    Assert-Equal @($messages | Where-Object {$_ -like 'ACTION:*'}).Count 1 'One persisted event'
 }
 $sha = [Security.Cryptography.SHA256]::Create()
 $sourceHash = [BitConverter]::ToString($sha.ComputeHash([IO.File]::ReadAllBytes($SourcePath))).Replace('-','')

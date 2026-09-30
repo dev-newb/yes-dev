@@ -214,6 +214,11 @@ The counter measures dialog dismissal after an approval action. It cannot inspec
 another client's protocol session. The isolated browser tests verify successful
 CDP connections separately, and require one counter event per tested connection.
 
+The log writer permits concurrent reading and uses bounded retries for short
+file locks. A confirmation stays pending until its ACTION record is saved. A
+reader that blocks log rotation does not cause the current event to be dropped;
+the engine appends it and retries rotation on a later write.
+
 ### Finding the dialog on macOS
 
 Same shape of problem, different tree. Here the dialog *is* attached to the

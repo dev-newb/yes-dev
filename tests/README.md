@@ -18,6 +18,8 @@ new, empty result directory. Results include JSON reports and the native test lo
   It never imports the app or starts a watcher.
 - `tray-log.py` tests complete and partial events, event-marker text inside other
   log messages, replacement files, truncation, and bounded partial-line storage.
+- `log-writer.ps1` tests 1,000 writes under a held reader, required-write failure
+  and recovery, blocked rotation, UTF-8 labels, and console-failure deduplication.
 - `legacy-native.ps1` compiles the original C# helper and operates a separate
   test process with real Windows controls and an explicit test UIA provider.
   It verifies native COM actions, both languages, process filtering, observe

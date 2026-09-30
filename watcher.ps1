@@ -251,16 +251,34 @@ $logDir = Split-Path -Parent $LogPath
 if (-not (Test-Path $logDir)) { New-Item -ItemType Directory -Path $logDir -Force | Out-Null }
 
 function Write-Log {
-    param([string]$Message, [string]$Level = 'INFO')
+    param([string]$Message, [string]$Level = 'INFO', [switch]$RequireWrite)
     $line = "{0} [{1}] {2}" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss.fff'), $Level, $Message
-    Write-Host $line
-    try {
-        # One generation is plenty; an engine that runs for months must not fill the disk.
-        if ((Test-Path $LogPath) -and ((Get-Item $LogPath).Length -gt 1048576)) {
-            Move-Item -Path $LogPath -Destination "$LogPath.1" -Force
+    $bytes = [System.Text.Encoding]::UTF8.GetBytes($line + [Environment]::NewLine)
+    $written = $false
+    for ($attempt = 0; $attempt -lt 5; $attempt++) {
+        try {
+            # A reader can briefly prevent rotation. Keep appending and try the
+            # rotation again on the next record rather than dropping this event.
+            if ((Test-Path $LogPath) -and ((Get-Item $LogPath).Length -gt 1048576)) {
+                try { Move-Item -Path $LogPath -Destination "$LogPath.1" -Force -ErrorAction Stop }
+                catch { }
+            }
+            # Add-Content in Windows PowerShell can reject concurrent readers.
+            # Explicit sharing makes log tailing compatible with append/rotation.
+            $stream = [IO.File]::Open($LogPath, [IO.FileMode]::Append, [IO.FileAccess]::Write,
+                ([IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete))
+            try { $stream.Write($bytes, 0, $bytes.Length) }
+            finally { $stream.Dispose() }
+            $written = $true
+            break
+        } catch {
+            if ($attempt -lt 4) { Start-Sleep -Milliseconds 20 }
         }
-        Add-Content -Path $LogPath -Value $line -Encoding utf8
-    } catch { }
+    }
+    # A broken console must not retry an event that is already in the file.
+    if ($written) { try { Write-Host $line } catch { }; return }
+    try { Write-Host ("{0} [WARN] log write failed: {1}" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss.fff'), $LogPath) } catch { }
+    if ($RequireWrite) { throw 'Approval event could not be persisted' }
 }
 
 $AE      = [System.Windows.Automation.AutomationElement]
@@ -365,7 +383,12 @@ function Complete-PendingApprovals {
             }
         }
         if ($dismissed) {
-            Write-Log "  APPROVED via $($entry.Method); dialog dismissed (hwnd=$($entry.Hwnd))" 'ACTION'
+            try {
+                Write-Log "  APPROVED via $($entry.Method); dialog dismissed (hwnd=$($entry.Hwnd))" 'ACTION' -RequireWrite
+            } catch {
+                # Keep the value-only record so that a later sweep can save it.
+                continue
+            }
             $pendingApprovals.Remove($key)
             $lastSeen.Remove([string]$entry.Hwnd)
             $completed++
