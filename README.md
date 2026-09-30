@@ -394,11 +394,11 @@ python3 watcher_mac.py --observe
 
 ## Known limitations
 
-- **English Chrome only.** The dialog is matched by its title, "Allow remote
-  debugging?", and the button by its label. A localised Chrome uses translated
-  strings and nothing will match. Both are parameters on `watcher.ps1`
-  (`-DialogPattern`, `-ApprovePattern`); `watcher_mac.py` has the equivalent
-  patterns as module constants. Neither tray exposes them yet.
+- **Windows supports English and Simplified Chinese (zh-CN) dialogs.** The
+  dialog title and approval button must match the configured language patterns.
+  Other languages need custom `-DialogPattern` and `-ApprovePattern` values in
+  `watcher.ps1`. The Windows tray does not expose these parameters. The macOS
+  patterns remain unchanged by the Windows fixes.
 - **Matched by string, so a Chrome rename breaks it.** If a future Chrome
   retitles the dialog, approvals silently stop. The log still records dialogs it
   found but could not act on, so observe mode will tell you quickly.
