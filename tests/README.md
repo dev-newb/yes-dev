@@ -76,3 +76,13 @@ message. `soak-log-reader.ps1` tests this while a writer holds the file open.
 The driver stops the watcher and its test browsers at the end.
 `analyze-soak.py` evaluates the completed samples. A successful finite soak is
 evidence for that workload and duration, not a guarantee for an indefinite run.
+
+## macOS quiet focus
+
+Run `python3 -m unittest discover -s tests -p 'test_quiet_focus.py' -v` from the
+repository root. These tests exercise the focus history with synthetic app and
+input events. They do not activate apps or prove live Chrome approval behavior.
+For a live check, enable Quiet focus, keep another app in front, and request a
+CDP connection. Check both that the previous app is restored and that the socket
+opens and answers `Browser.getVersion`. Also check that an intentional app switch
+is respected and that observe-only mode never restores focus.

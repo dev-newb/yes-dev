@@ -279,7 +279,8 @@ def _is_visible(element) -> bool:
 class Engine:
     def __init__(self, observe: bool = False, poll_ms: int = POLL_MS_DEFAULT,
                  include_edge: bool = False, log_path: Path = LOG_PATH,
-                 exit_with_parent: bool = False, diagnostics: bool = False) -> None:
+                 exit_with_parent: bool = False, diagnostics: bool = False,
+                 quiet_focus: bool = False) -> None:
         self.observe = observe
         self.poll_s = max(0.05, poll_ms / 1000.0)
         self.bundles = CHROME_BUNDLES + (EDGE_BUNDLES if include_edge else ())
@@ -292,6 +293,31 @@ class Engine:
         self._audited: set[tuple] = set()    # sheet-candidate decisions already logged
         self._first_seen: dict[str, float] = {}  # dedupe key -> sweep clock when first seen
         self._next_diagnostic_at = 0.0
+        self.focus = None
+        if quiet_focus and not observe:
+            try:
+                from quiet_focus import MacQuietFocus
+                self.focus = MacQuietFocus(self.bundles, self.log)
+            except Exception as exc:
+                self.log(f"quiet focus unavailable: {exc!r}", "WARN")
+
+    def _wait(self, seconds: float) -> None:
+        if self.focus is not None:
+            try:
+                self.focus.wait(seconds)
+                return
+            except Exception as exc:
+                self.log(f"quiet focus disabled after error: {exc!r}", "WARN")
+                self.focus = None
+        time.sleep(seconds)
+
+    def _restore_focus(self, pid: int) -> None:
+        if self.focus is not None:
+            try:
+                self.focus.restore_for(pid)
+            except Exception as exc:
+                self.log(f"quiet focus disabled after error: {exc!r}", "WARN")
+                self.focus = None
 
     # -------- logging: byte-for-byte the format the tray parses --------
 
@@ -623,7 +649,7 @@ class Engine:
                 if state != "live":
                     return self._no_key(state, f"after {stop} Tab(s)", pressed)
                 self._key(pid, VK_TAB, "Tab")
-                time.sleep(0.1)
+                self._wait(0.1)
                 if _attr(button, "AXFocused"):
                     self.log(f"  Allow focused after {stop + 1} Tab(s)", "AUDIT")
                     break
@@ -637,7 +663,7 @@ class Engine:
             self.log("  Allow not focused at the moment of Space - not sending", "AUDIT")
             return None
         self._key(pid, VK_SPACE, "Space")
-        time.sleep(VERIFY_WAIT_S)
+        self._wait(VERIFY_WAIT_S)
         self._log_press_state(host, button, "after Space")
         if self._sheet_still_up(host, button):
             return None
@@ -658,14 +684,14 @@ class Engine:
         seen_at = time.monotonic()
         # Approve in place without raising the sheet or its parent window.
         ax_ok = self._press(button) is not None
-        time.sleep(VERIFY_WAIT_S)
+        self._wait(VERIFY_WAIT_S)
         self._log_press_state(host, button, "after first AXPress")
         if not self._sheet_still_up(host, button):
             return "AXPress" if ax_ok else "AlreadyDismissed"
 
         guard_left = ACTIVATION_GUARD_S - (time.monotonic() - seen_at)
         if guard_left > 0:
-            time.sleep(guard_left)
+            self._wait(guard_left)
         return self._key_approve(pid, host, button, "AXPress" if ax_ok else "AlreadyDismissed")
 
     def _element_summary(self, element) -> str:
@@ -685,6 +711,7 @@ class Engine:
     # -------- one sweep, and the loop --------
 
     def sweep(self) -> None:
+        self._wait(0)
         now = time.time()
         is_diagnostic_sweep = self.diagnostics and now >= self._next_diagnostic_at
         if is_diagnostic_sweep:
@@ -724,6 +751,9 @@ class Engine:
                     if not labels:
                         self.log("  sheet matched but no button labels - not pressing", "AUDIT")
                         continue
+
+                    if self.focus is not None and self.find_approve_button(host) is not None:
+                        self._restore_focus(pid)
 
                     key = self._dedupe_key(host)
                     # A sheet is pressed only once it has stood for the
@@ -803,7 +833,7 @@ class Engine:
             # Keep running: the grant can be given while we are up, and the next
             # sweep will start seeing elements. Better than exiting and looking dead.
         self.log(f"engine started (observe={self.observe}, interval={int(self.poll_s * 1000)}ms, "
-                 f"bundles={len(self.bundles)}, pid={os.getpid()})")
+                 f"bundles={len(self.bundles)}, pid={os.getpid()}, quiet_focus={self.focus is not None})")
         while True:
             if self.exit_with_parent and os.getppid() != self._parent_pid:
                 # The tray is gone (quit, crashed, killed, logged out) and we have
@@ -819,7 +849,7 @@ class Engine:
                 self.sweep()
             except Exception as exc:
                 self.log(f"loop error: {exc!r}", "ERROR")
-            time.sleep(self.poll_s)
+            self._wait(self.poll_s)
 
 
 def main(argv=None) -> int:
@@ -828,6 +858,8 @@ def main(argv=None) -> int:
     ap.add_argument("--once", action="store_true", help="one sweep then exit")
     ap.add_argument("--interval-ms", type=int, default=POLL_MS_DEFAULT)
     ap.add_argument("--include-edge", action="store_true")
+    ap.add_argument("--quiet-focus", action="store_true",
+                    help="restore the previous app on a recent browser activation with a debug prompt (experimental)")
     ap.add_argument("--log-path", default=str(LOG_PATH))
     ap.add_argument("--exit-with-parent", action="store_true",
                     help="stop as soon as the launching process goes away; the "
@@ -840,7 +872,7 @@ def main(argv=None) -> int:
     engine = Engine(observe=args.observe, poll_ms=args.interval_ms,
                     include_edge=args.include_edge, log_path=Path(args.log_path),
                     exit_with_parent=args.exit_with_parent,
-                    diagnostics=args.diagnostics)
+                    diagnostics=args.diagnostics, quiet_focus=args.quiet_focus)
     if args.once:
         if not is_trusted():
             engine.log("NOT trusted for Accessibility - results will be empty.", "ERROR")

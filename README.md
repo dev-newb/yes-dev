@@ -510,6 +510,18 @@ python3 watcher_mac.py --observe
   builds the sheet, so the frontmost app becomes Chrome the moment a client
   connects. The engine does not raise the sheet or its parent window during
   approval. Chrome's initial activation can still interrupt typing in another app.
+- **Quiet focus is optional and experimental.** On macOS, enable
+  `Options > Quiet focus (experimental)` to return to the previous app when a
+  debugging prompt appears just after Chrome comes forward. This restores focus;
+  it cannot prevent the initial flash, a Space change, or characters typed during
+  that interval. It does not restore another window within the same Chrome app.
+  Recent mouse clicks or modifier-key activity cancel the restore, as does
+  switching to another app. These are conservative heuristics, not a guarantee
+  that every intentional switch can be distinguished from a prompt. A stale
+  activation, a hidden or closed previous app, and observe-only mode never trigger
+  a restore. The option defaults to off. It can also be enabled for the standalone
+  engine with `--quiet-focus`. Approval animations are controlled separately by
+  `Approve notice > Silent`.
 - **Less mileage.** The Windows build has 454 real approvals behind it. The
   macOS build has been verified end to end against live prompts on Chrome 152,
   153 and 154 - engine, tray, overlay, teardown, each grant confirmed on the

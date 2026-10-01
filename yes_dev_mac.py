@@ -57,13 +57,13 @@ WATCHER = BASE / "watcher_mac.py"
 OVERLAY = BASE / "puffs_mac.py"
 BURST_DIALOG = BASE / "burst_dialog.py"
 
-# The config schema is shared with the Windows build byte for byte - the same
-# file, the same keys - so a synced config works on either. Keep them in step.
+# Common settings are shared with Windows; quiet_focus is macOS-only.
 DEFAULTS = {
     "enabled": True,
     "observe_only": False,
     "poll_ms": 250,
     "include_edge": False,
+    "quiet_focus": False,  # macOS-only, opt-in focus restoration
     # How routine approvals are announced: "puffs", "toast" or "none".
     "notify_style": "puffs",
     # Approvals per minute before pausing; 0 disables the guard.
@@ -259,6 +259,8 @@ class YesDev(rumps.App):
             args.append("--observe")
         if self.cfg["include_edge"]:
             args.append("--include-edge")
+        if self.cfg.get("quiet_focus") and not self.cfg["observe_only"]:
+            args.append("--quiet-focus")
         if self.cfg.get("diagnostics"):
             args.append("--diagnostics")
 
@@ -499,6 +501,9 @@ class YesDev(rumps.App):
         self.mi_edge = rumps.MenuItem("Include Microsoft Edge",
                                       callback=self.on_toggle("include_edge", restart=True))
 
+        self.mi_quiet = rumps.MenuItem("Quiet focus (experimental)",
+                                       callback=self.on_toggle("quiet_focus", restart=True))
+
         # Radio groups: rumps has no radio flag, so the check marks are managed
         # in refresh() from the config, which is the single source of truth.
         self.radios: dict[str, list[tuple[rumps.MenuItem, object]]] = {}
@@ -524,7 +529,7 @@ class YesDev(rumps.App):
             ["Approve notice", group("notify_style", NOTIFY_CHOICES)],
             ["Pause on burst", group("burst_limit", BURST_CHOICES)
                                + [None] + group("burst_action", BURST_ACTIONS)],
-            ["Options", [self.mi_observe, self.mi_edge]],
+            ["Options", [self.mi_quiet, self.mi_observe, self.mi_edge]],
             None,
             rumps.MenuItem("Open log", callback=self.on_open(LOG_PATH)),
             rumps.MenuItem("Open config", callback=self.on_open(CONFIG_PATH)),
@@ -580,6 +585,7 @@ class YesDev(rumps.App):
             self.mi_autostart.state = 1 if platform_mac.autostart_enabled() else 0
             self.mi_observe.state = 1 if self.cfg["observe_only"] else 0
             self.mi_edge.state = 1 if self.cfg["include_edge"] else 0
+            self.mi_quiet.state = 1 if self.cfg.get("quiet_focus") else 0
             for key, items in self.radios.items():
                 for item, value in items:
                     item.state = 1 if self.cfg.get(key) == value else 0
