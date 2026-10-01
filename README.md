@@ -508,7 +508,8 @@ python3 watcher_mac.py --observe
 - **Chrome brings itself forward when it prompts.** The engine never activates
   Chrome, but Chrome's own dialog code activates the browser window before it
   builds the sheet, so the frontmost app becomes Chrome the moment a client
-  connects. That is Chrome, not the engine, and nothing here can prevent it.
+  connects. The engine does not raise the sheet or its parent window during
+  approval. Chrome's initial activation can still interrupt typing in another app.
 - **Less mileage.** The Windows build has 454 real approvals behind it. The
   macOS build has been verified end to end against live prompts on Chrome 152,
   153 and 154 - engine, tray, overlay, teardown, each grant confirmed on the
