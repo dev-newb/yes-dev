@@ -153,12 +153,19 @@ again so its shortcut points to the new location.
 ### macOS
 
 Requires Python 3.9+. Use a python.org build, or a Homebrew one with Tk, since
-the burst dialog is Tk. Built and verified on macOS 26 with Chrome 152; nothing
-here is new API, but no older macOS has been tested.
+the burst dialog is Tk. Built and verified on macOS 26 against live prompts on
+Chrome 152, 153 and 154; nothing here is new API, but no older macOS has been
+tested.
 
 ```bash
-pip install rumps pillow pyobjc-framework-Cocoa pyobjc-framework-ApplicationServices
+pip install -r requirements.txt
 ```
+
+That pulls in `rumps`, `pillow` and the pyobjc frameworks the engine needs:
+Cocoa, ApplicationServices and Quartz. Quartz is not optional - it carries the
+keyboard fallback described under
+[Finding the dialog on macOS](#finding-the-dialog-on-macos), and the engine
+refuses to start without it.
 
 ```bash
 python3 yes_dev_mac.py
@@ -275,19 +282,42 @@ AXApplication  "Chrome"
         AXButton  "Turn off in settings" | "Cancel" | "Allow"
 ```
 
+That is the shape on Chrome 152 and 154. Chrome 153 leaves the sheet's own
+title empty and puts the same string on an `AXHeading` inside it, so an untitled
+sheet whose heading matches counts as the host too. The heading walk is shallow
+and runs only for untitled dialogs, so the idle scan still costs well under a
+millisecond per Chrome process.
+
 `watcher_mac.py` walks each Chrome process's windows, sheets and children,
-matches by title *and* role, and presses the button with `AXPress` - again with
-no mouse movement and no focus stealing.
+matches by title (or heading) *and* role, and presses the button with
+`AXPress` - with no mouse movement, and without activating Chrome.
+
+It does not press straight away. Chromium discards input for half a second
+after a security-sensitive dialog appears, and on Chrome 154 that includes
+`AXPress`: a press inside that window returns success and does nothing. So a
+sheet is pressed only once it has stood for that guard, measured from the sweep
+that first saw it. That costs at most one poll plus the guard in latency and
+makes the first press land. Measured on 154 with three clients queued: before
+the guard, every first press was swallowed and every approval needed a second
+sweep; after it, one press per sheet.
 
 An approval is logged only once the sheet is verified gone, and "gone" is judged
 by the AX references that were pressed, never by what now sits at those
 coordinates - Chrome draws the next queued prompt exactly where the last one was,
 so a geometry check would call a dismissed sheet still up and miss a real
-approval. Under load `AXPress` can report success while the sheet outlives the
-check. A longer AX timeout and a re-press clears that, and there is no synthetic
-click anywhere in the engine: a cursorless one was tried four ways and Chrome
-ignores them all, and a pointer-moving one would break the promise above. A sheet
-that outlives the retries is logged FAILED and pressed again next sweep.
+approval.
+
+If the sheet still stands after the press, the engine falls back to the
+keyboard: it writes `AXFocused` onto the Allow button and posts a Space
+keystroke to Chrome's process with `CGEventPostToPid`, which delivers keyboard
+events without moving the pointer. Every keystroke is gated on the pressed sheet
+still being the same live node, re-read before the focus write and immediately
+before Space, so a key is never posted at a sheet that has already gone. This
+path only works with **Keyboard navigation** on (System Settings > Keyboard);
+with it off, Chrome declines the focus write and Tab cannot reach the button, so
+the engine sends nothing and simply retries next sweep. There is still no
+synthetic mouse click anywhere in the engine. A sheet that outlives both routes
+is logged FAILED and pressed again next sweep.
 
 Two macOS-specific traps, both found by running `docs/mac/ax_probe.py` against a
 live prompt:
@@ -468,9 +498,23 @@ python3 watcher_mac.py --observe
 - **Autostart works but is untested across a real logout.** The LaunchAgent is
   written and loaded correctly; surviving an actual logout and login has not
   been proven the way it was on Windows.
+- **The keyboard fallback needs Keyboard navigation.** System Settings >
+  Keyboard > Keyboard navigation is off by default, and Chrome's dialogs follow
+  it: with it off, the `AXFocused` write on Allow reads back false and Tab cannot
+  reach the button, so the fallback is skipped and the sheet is retried next
+  sweep. On Chrome 154 the first press lands once the activation guard has
+  passed, so the fallback is rarely needed; FAILED lines that clear on the next
+  sweep are what it looks like when it is. Check with
+  `defaults read -g AppleKeyboardUIMode` - 2 or 3 means on.
+- **Chrome brings itself forward when it prompts.** The engine never activates
+  Chrome, but Chrome's own dialog code activates the browser window before it
+  builds the sheet, so the frontmost app becomes Chrome the moment a client
+  connects. That is Chrome, not the engine, and nothing here can prevent it.
 - **Less mileage.** The Windows build has 454 real approvals behind it. The
-  macOS build has been verified end to end against live prompts - engine, tray,
-  overlay, teardown - but it has not yet run for days on end.
+  macOS build has been verified end to end against live prompts on Chrome 152,
+  153 and 154 - engine, tray, overlay, teardown, each grant confirmed on the
+  client's socket rather than by the sheet vanishing - but it has not yet run
+  for days on end.
 
 ## License
 
