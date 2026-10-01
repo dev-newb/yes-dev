@@ -3,7 +3,7 @@
 Newest first. Each entry says what changed and, where it matters, what was
 measured - the numbers are from this repo's own runs, not estimates.
 
-## Unreleased
+## 1.2.2 - 2026-09-30
 
 ### macOS
 
@@ -137,8 +137,8 @@ and 3.24 MiB. These finite runs do not establish indefinite stability. See the
 This is a source release. On Windows, exit the tray app, update the source and
 requirements, and restart it. Existing settings stay in `%LOCALAPPDATA%\YesDev`.
 The published v1.2.1 tag contains the Windows fixes only; its macOS code is
-unchanged. The later macOS changes from [#4](https://github.com/dev-newb/yes-dev/pull/4)
-and [#6](https://github.com/dev-newb/yes-dev/pull/6) are on `main` under Unreleased.
+unchanged. The macOS changes from [#4](https://github.com/dev-newb/yes-dev/pull/4)
+and [#6](https://github.com/dev-newb/yes-dev/pull/6) shipped in 1.2.2.
 
 ### Thanks
 

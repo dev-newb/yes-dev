@@ -11,20 +11,19 @@ debugging endpoint. If you drive Chrome with more than one agent or automation
 client, those prompts stack up and each one blocks its client until a human
 clicks Allow. `Yes, Dev` sits in the tray and answers them.
 
-**Latest release: [v1.2.1 - Windows approval and counter fixes](https://github.com/dev-newb/yes-dev/releases/tag/v1.2.1).**
-[Download the source ZIP](https://github.com/dev-newb/yes-dev/archive/refs/tags/v1.2.1.zip)
-and follow the [Windows install steps](#windows). This is a Python source release,
-not a standalone `.exe` installer.
+**Latest release: [v1.2.2 - macOS on Chrome 153 and 154](https://github.com/dev-newb/yes-dev/releases/tag/v1.2.2).**
+[Download the source ZIP](https://github.com/dev-newb/yes-dev/archive/refs/tags/v1.2.2.zip)
+and follow the [Windows](#windows) or [macOS](#macos) install steps. This is a
+Python source release, not a standalone installer.
 
-This release fixes Chrome/Edge process detection, English and Simplified Chinese
-consent dialogs, the native Windows fallback, and approval counting and logging.
-Validation includes **143 passing checks**, **32 simultaneous browser connections**,
-and two 30-minute runs with **480 successful connections and 480 saved counter
-events**. See the [test report and memory measurements](docs/testing/windows-validation-2026-09-30.md).
-The **v1.2.1 download** does not include the later macOS changes from
+This release carries the macOS work from
 [#4](https://github.com/dev-newb/yes-dev/pull/4) and
-[#6](https://github.com/dev-newb/yes-dev/pull/6). Those changes are now on `main`;
-see [Unreleased in the changelog](CHANGELOG.md#unreleased).
+[#6](https://github.com/dev-newb/yes-dev/pull/6): Chrome 153's untitled consent
+sheet, the press-age guard that Chrome 154 needs, and a keyboard fallback that
+never posts at a sheet that has already gone. It contains everything in v1.2.1,
+which fixed Chrome/Edge process detection, English and Simplified Chinese consent
+dialogs, the native Windows fallback, and approval counting and logging; see the
+[test report and memory measurements](docs/testing/windows-validation-2026-09-30.md).
 
 Measured on Chrome 151: four parallel attaches went from ~35 seconds of waiting
 on a human to **2.4-4.4 seconds**, unattended.
@@ -111,7 +110,7 @@ profile can also use approval mode, as the isolated tests do.
 
 ## Install
 
-Download the [v1.2.1 source ZIP](https://github.com/dev-newb/yes-dev/archive/refs/tags/v1.2.1.zip)
+Download the [v1.2.2 source ZIP](https://github.com/dev-newb/yes-dev/archive/refs/tags/v1.2.2.zip)
 and extract it, or clone the current repository:
 
 ```bash
