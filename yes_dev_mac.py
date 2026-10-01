@@ -55,6 +55,7 @@ from platform_mac import (
 
 WATCHER = BASE / "watcher_mac.py"
 OVERLAY = BASE / "puffs_mac.py"
+FOCUS_GUARD = BASE / "focus_guard_mac.py"
 BURST_DIALOG = BASE / "burst_dialog.py"
 
 # The config schema is shared with the Windows build byte for byte - the same
@@ -72,6 +73,10 @@ DEFAULTS = {
     "burst_action": "ask",
     # Minutes to stay armed before disarming automatically; 0 = until turned off.
     "arm_minutes": 0,
+    # macOS only: hand focus back to the app you were in when Chrome takes it to
+    # show a consent sheet. A blink, not prevention - see focus_guard_mac.py.
+    # The Windows build never needs this and ignores the key.
+    "quiet_focus": False,
 }
 
 BURST_WINDOW = 60.0    # seconds
@@ -221,6 +226,7 @@ class YesDev(rumps.App):
         super().__init__(APP_NAME, title=None, icon=icon_path("off"), quit_button=None)
 
         self.proc: subprocess.Popen | None = None
+        self.guard: subprocess.Popen | None = None   # focus guard, when quiet_focus is on
         self.approvals = 0
         self.recent: deque[float] = deque()      # timestamps, for the burst guard
         self.disarm_at: datetime | None = None
@@ -277,8 +283,10 @@ class YesDev(rumps.App):
         mins = int(self.cfg["arm_minutes"] or 0)
         self.disarm_at = datetime.now() + timedelta(minutes=mins) if mins else None
         self.paused_reason = None
+        self.sync_guard()
 
     def stop_engine(self) -> None:
+        self.stop_guard()
         proc, self.proc = self.proc, None
         if proc is not None and proc.poll() is None:
             # No taskkill here: the engine is a plain child process with no shell
@@ -301,6 +309,51 @@ class YesDev(rumps.App):
             self.stop_engine()
             time.sleep(0.2)
             self.start_engine()
+
+    # ---------- focus guard lifetime ----------
+    #
+    # The guard lives only while the engine is approving. With the engine off,
+    # observing, or paused, the user has to see the sheet to click it themselves,
+    # and taking focus away from it would be exactly wrong.
+
+    def guard_running(self) -> bool:
+        return self.guard is not None and self.guard.poll() is None
+
+    def guard_wanted(self) -> bool:
+        return bool(self.cfg.get("quiet_focus")) and self.engine_running() and not self.cfg["observe_only"]
+
+    def sync_guard(self) -> None:
+        if self.guard_wanted():
+            if not self.guard_running():
+                self.start_guard()
+        elif self.guard_running():
+            self.stop_guard()
+
+    def start_guard(self) -> None:
+        args = [sys.executable, str(FOCUS_GUARD), "--exit-with-parent"]
+        if self.cfg["include_edge"]:
+            args.append("--include-edge")
+        try:
+            self.guard = subprocess.Popen(args, stdout=subprocess.DEVNULL,
+                                          stderr=subprocess.DEVNULL)
+        except Exception as exc:
+            log(f"focus guard failed to start: {exc!r}")
+            return
+        log(f"focus guard started pid={self.guard.pid}")
+
+    def stop_guard(self) -> None:
+        proc, self.guard = self.guard, None
+        if proc is not None and proc.poll() is None:
+            try:
+                proc.terminate()
+                proc.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+            except Exception:
+                pass
 
     # ---------- background loop ----------
 
@@ -329,6 +382,7 @@ class YesDev(rumps.App):
                 if self.disarm_at and datetime.now() >= self.disarm_at:
                     self._pause("timer expired")
                     self.notify(f"Disarmed after {self.cfg['arm_minutes']} min")
+            self.sync_guard()        # start it, or restart it if it died
             self._read_log()
             self.refresh()
         except Exception:
@@ -498,6 +552,8 @@ class YesDev(rumps.App):
                                          callback=self.on_toggle("observe_only", restart=True))
         self.mi_edge = rumps.MenuItem("Include Microsoft Edge",
                                       callback=self.on_toggle("include_edge", restart=True))
+        self.mi_quiet = rumps.MenuItem("Quiet focus (experimental)",
+                                       callback=self.on_toggle("quiet_focus"))
 
         # Radio groups: rumps has no radio flag, so the check marks are managed
         # in refresh() from the config, which is the single source of truth.
@@ -524,7 +580,7 @@ class YesDev(rumps.App):
             ["Approve notice", group("notify_style", NOTIFY_CHOICES)],
             ["Pause on burst", group("burst_limit", BURST_CHOICES)
                                + [None] + group("burst_action", BURST_ACTIONS)],
-            ["Options", [self.mi_observe, self.mi_edge]],
+            ["Options", [self.mi_observe, self.mi_edge, self.mi_quiet]],
             None,
             rumps.MenuItem("Open log", callback=self.on_open(LOG_PATH)),
             rumps.MenuItem("Open config", callback=self.on_open(CONFIG_PATH)),
@@ -580,6 +636,7 @@ class YesDev(rumps.App):
             self.mi_autostart.state = 1 if platform_mac.autostart_enabled() else 0
             self.mi_observe.state = 1 if self.cfg["observe_only"] else 0
             self.mi_edge.state = 1 if self.cfg["include_edge"] else 0
+            self.mi_quiet.state = 1 if self.cfg.get("quiet_focus") else 0
             for key, items in self.radios.items():
                 for item, value in items:
                     item.state = 1 if self.cfg.get(key) == value else 0
@@ -604,10 +661,11 @@ class YesDev(rumps.App):
 
     def on_toggle(self, key: str, restart: bool = False):
         def handler(_item) -> None:
-            self.cfg[key] = not self.cfg[key]
+            self.cfg[key] = not self.cfg.get(key)
             self.cfg.save()
             if restart:
                 self.restart_engine()
+            self.sync_guard()
             self.refresh()
         return handler
 
@@ -661,7 +719,7 @@ class YesDev(rumps.App):
         rumps.quit_application()
 
     def shutdown(self) -> None:
-        self.stop_engine()
+        self.stop_engine()           # stops the guard too
         if self._asking is not None:
             try:
                 self._asking.kill()
