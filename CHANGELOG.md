@@ -3,6 +3,41 @@
 Newest first. Each entry says what changed and, where it matters, what was
 measured - the numbers are from this repo's own runs, not estimates.
 
+## Unreleased
+
+### macOS: quiet focus, an option that hands focus back when Chrome takes it
+
+Chrome activates its own window the moment a client connects, before it has
+built the consent sheet, and macOS lets it: the app asking for activation has
+the last word, window flags do not veto it, and the only things that would are
+a modified Chrome or a SIP-disabled Dock. So the prompt steals focus on every
+connection, something Windows users never saw because Windows refuses
+foreground changes from background processes.
+
+`Options > Quiet focus (experimental)`, off by default, runs a small helper
+beside the engine (`focus_guard_mac.py`, its own process, alive only while the
+engine is approving). It watches app activations and, when Chrome has just come
+forward on its own with a consent sheet up, hands focus straight back to the app
+that had it while the engine approves in the background. "On its own" means no
+mouse or keyboard input in the previous half second; a click or a Cmd-Tab into
+Chrome is left alone. The restore goes through Accessibility, asking the
+previous app to activate itself, which macOS grants the way it granted Chrome.
+
+Measured against a stand-in app that steals focus with the same two calls
+Chrome's widget makes (`tests/mac/focus_flasher.py`), with WindowServer's own
+frontmost log as the judge (`tests/mac/measure_quiet_focus.py`): over 31
+flashes, including six 0.35 s apart, the stand-in was frontmost for a median of
+13 ms and at worst 51 ms, and focus came back to the right app every time. The
+sheet check costs 0.6 ms against a live Chrome. Not yet measured against a real
+prompt.
+
+A blink, not prevention: keystrokes inside it reach Chrome's sheet, and a
+full-screen app still changes desktops unless Mission Control's "switch to a
+Space with open windows" setting is off. Removing the prompt itself means not
+triggering it; `docs/planning/cdp-proxy.md` is the plan for that.
+
+The config key is `quiet_focus`; the Windows build ignores it.
+
 ## 1.2.2 - 2026-09-30
 
 ### macOS

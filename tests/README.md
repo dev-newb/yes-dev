@@ -76,3 +76,19 @@ message. `soak-log-reader.ps1` tests this while a writer holds the file open.
 The driver stops the watcher and its test browsers at the end.
 `analyze-soak.py` evaluates the completed samples. A successful finite soak is
 evidence for that workload and duration, not a guarantee for an indefinite run.
+
+# macOS
+
+`tests/mac/measure_quiet_focus.py` measures the focus guard behind Quiet focus
+against `tests/mac/focus_flasher.py`, a stand-in app that steals focus with the
+same two calls Chrome's widget makes, using WindowServer's own frontmost log as
+the judge. Run it with your hands off the keyboard and mouse, since a click or a
+keypress is read by the guard as a deliberate switch:
+
+```bash
+python3 tests/mac/measure_quiet_focus.py --count 10 --interval 2
+```
+
+It reports, per flash, how long the stand-in was frontmost and whether focus
+came back to the app that had it. No browser and no prompt are involved; the
+real-prompt run is a manual test.

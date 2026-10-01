@@ -207,6 +207,7 @@ WebSocket handshake, so the connection waits until approval.
 | **Pause on burst** | Trip past 30 / 60 / 120 approvals a minute, or off. Then either **ask me first** (5s dialog: Stop, or Allow for one hour) or **stop silently** and re-arm after a minute. |
 | **Observe only** | Log the dialogs but don't click - useful for a first look. |
 | **Include Microsoft Edge** | Watch Edge windows too. |
+| **Quiet focus (experimental)** *(macOS)* | Hand focus back to the app you were in when Chrome takes it for a prompt: a blink of about 15 ms instead of a stolen window. Off by default; see [macOS specifically](#macos-specifically). |
 | **Open log / Open config** | The data directory for your platform (see [Files](#files)). |
 
 The icon is green when armed, amber when observing, grey when off, red when
@@ -445,8 +446,10 @@ in the data directory.
 | `platform_mac.py` | macOS paths, single instance, permission check, autostart |
 | `puffs.py` | The cloud overlay and the shared artwork. Its own process. |
 | `puffs_mac.py` | The macOS cloud overlay. Its own process. |
+| `focus_guard_mac.py` | The macOS focus guard behind Quiet focus. Its own process. |
 | `burst_dialog.py` | The five-second burst prompt. Also its own process. Shared. |
 | `docs/mac/ax_probe.py` | Dumps Chrome's accessibility tree around the dialog |
+| `tests/mac/` | Measures the focus guard against a stand-in that steals focus the way Chrome does |
 | `docs/make_art.py`, `docs/make_art_mac.py` | Regenerate the cloud art from `puffs.py` |
 
 Everything the app writes lives in one directory per platform:
@@ -508,7 +511,20 @@ python3 watcher_mac.py --observe
 - **Chrome brings itself forward when it prompts.** The engine never activates
   Chrome, but Chrome's own dialog code activates the browser window before it
   builds the sheet, so the frontmost app becomes Chrome the moment a client
-  connects. That is Chrome, not the engine, and nothing here can prevent it.
+  connects. Nothing outside Chrome can veto that. **Quiet focus** (under
+  Options, experimental, off by default) is the nearest thing: a helper that
+  watches app activations and hands focus straight back when Chrome has just
+  come forward on its own with a consent sheet up, while the engine approves in
+  the background. "On its own" means no mouse or keyboard input in the previous
+  half second; your own click or Cmd-Tab into Chrome is left alone. Measured
+  against a stand-in that steals focus with the same calls Chrome makes, the
+  stand-in was frontmost for a median of 13 ms and at worst 51 ms, with focus
+  back where it was every time (`tests/mac/measure_quiet_focus.py`). It is a
+  blink, not prevention: a keystroke inside it reaches Chrome's sheet, where
+  Space presses Cancel and a Cmd shortcut acts on Chrome, and if your app is
+  full-screen the activation still switches desktops unless Mission Control's
+  "switch to a Space with open windows" setting is off. The only way to remove
+  the prompt itself is not to trigger it; see `docs/planning/cdp-proxy.md`.
 - **Less mileage.** The Windows build has 454 real approvals behind it. The
   macOS build has been verified end to end against live prompts on Chrome 152,
   153 and 154 - engine, tray, overlay, teardown, each grant confirmed on the
