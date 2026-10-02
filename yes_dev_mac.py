@@ -24,6 +24,7 @@ Run it with the repo's Python: `python3 yes_dev_mac.py`.
 """
 from __future__ import annotations
 
+import argparse
 import json
 import random
 import signal
@@ -58,36 +59,14 @@ OVERLAY = BASE / "puffs_mac.py"
 FOCUS_GUARD = BASE / "focus_guard_mac.py"
 BURST_DIALOG = BASE / "burst_dialog.py"
 
-# The config schema is shared with the Windows build byte for byte - the same
-# file, the same keys - so a synced config works on either. Keep them in step.
-DEFAULTS = {
-    "enabled": True,
-    "observe_only": False,
-    "poll_ms": 250,
-    "include_edge": False,
-    # How routine approvals are announced: "puffs", "toast" or "none".
-    "notify_style": "puffs",
-    # Approvals per minute before pausing; 0 disables the guard.
-    "burst_limit": 60,
-    # What a burst does: "ask" puts up a 5s dialog, "stop" acts without asking.
-    "burst_action": "ask",
-    # Minutes to stay armed before disarming automatically; 0 = until turned off.
-    "arm_minutes": 0,
-    # macOS only: hand focus back to the app you were in when Chrome takes it to
-    # show a consent sheet. A blink, not prevention - see focus_guard_mac.py.
-    # The Windows build never needs this and ignores the key.
-    "quiet_focus": False,
-}
+from settings_model import normalize, save_atomic
+
+RELAY = BASE / "relay_mac.py"
+RELAY_STATUS = DATA_DIR / "relay-status.json"
 
 BURST_WINDOW = 60.0    # seconds
 BURST_COOLDOWN = 60.0  # auto-resume after this long, rather than stranding agents
 ALLOW_HOUR = 3600.0
-
-BURST_CHOICES = [("Off", 0), ("30 / min", 30), ("60 / min", 60), ("120 / min", 120)]
-BURST_ACTIONS = [("Ask me first (5s)", "ask"), ("Stop silently", "stop")]
-POLL_CHOICES = [("Snappy (150ms)", 150), ("Normal (250ms)", 250), ("Relaxed (750ms)", 750)]
-ARM_CHOICES = [("Until I turn it off", 0), ("15 minutes", 15), ("1 hour", 60), ("4 hours", 240)]
-NOTIFY_CHOICES = [("Floating puffs", "puffs"), ("Toast card", "toast"), ("Silent", "none")]
 
 # rumps forces every status icon into a 20x20 point square. A cloud is much wider
 # than it is tall, so squaring it wastes the top and bottom of the box and the
@@ -183,41 +162,19 @@ def icon_point_size(path: str) -> tuple[float, float]:
 
 class Config(dict):
     def __init__(self) -> None:
-        super().__init__(DEFAULTS)
+        saved = {}
         if CONFIG_PATH.exists():
             try:
-                # utf-8-sig, kept from the Windows build: nothing on macOS writes
-                # a BOM, but a config synced from a Windows machine has one, and
-                # utf-8-sig reads files with and without it. We always write plain
-                # utf-8 (see save()).
-                self.update(json.loads(CONFIG_PATH.read_text(encoding="utf-8-sig")))
+                saved = json.loads(CONFIG_PATH.read_text(encoding="utf-8-sig"))
             except Exception as exc:
                 log(f"config unreadable ({exc!r}) - using defaults")
-
-        # Config from before puffs existed carried a notify_on_approve bool.
-        old = self.pop("notify_on_approve", None)
-        if old is not None and "notify_style" not in self:
-            self["notify_style"] = "puffs" if old else "none"
-        if self.get("notify_style") not in {"puffs", "toast", "none"}:
-            self["notify_style"] = DEFAULTS["notify_style"]
-
-        # The guard used to be an on/off flag with a fixed limit of 15/min.
-        guard = self.pop("burst_guard", None)
-        if guard is not None and "burst_limit" not in self:
-            self["burst_limit"] = DEFAULTS["burst_limit"] if guard else 0
-        try:
-            self["burst_limit"] = max(0, int(self["burst_limit"]))
-        except (TypeError, ValueError):
-            self["burst_limit"] = DEFAULTS["burst_limit"]
-        if self.get("burst_action") not in {"ask", "stop"}:
-            self["burst_action"] = DEFAULTS["burst_action"]
+        super().__init__(normalize(saved))
 
     def save(self) -> None:
         try:
-            ensure_data_dir()
-            CONFIG_PATH.write_text(json.dumps(self, indent=2), encoding="utf-8")
-        except Exception:
-            pass
+            save_atomic(CONFIG_PATH, self)
+        except Exception as exc:
+            log(f"config save failed: {exc!r}")
 
 
 class YesDev(rumps.App):
@@ -226,7 +183,10 @@ class YesDev(rumps.App):
         super().__init__(APP_NAME, title=None, icon=icon_path("off"), quit_button=None)
 
         self.proc: subprocess.Popen | None = None
-        self.guard: subprocess.Popen | None = None   # focus guard, when quiet_focus is on
+        self.guard: subprocess.Popen | None = None   # normal focus guard
+        self.relay: subprocess.Popen | None = None
+        self._relay_retry_at = 0.0
+        self._settings = None
         self.approvals = 0
         self.recent: deque[float] = deque()      # timestamps, for the burst guard
         self.disarm_at: datetime | None = None
@@ -239,8 +199,7 @@ class YesDev(rumps.App):
         self._asking_count = 0
         self._icon_state: str | None = None
 
-        # Materialise the config on first run, so "Open config" has something to
-        # open and the defaults are visible rather than implied.
+        # Persist migrated defaults; settings are edited in the native window.
         self.cfg.save()
         self._build_menu()
         self.refresh()
@@ -286,6 +245,7 @@ class YesDev(rumps.App):
         self.sync_guard()
 
     def stop_engine(self) -> None:
+        self.stop_relay()
         self.stop_guard()
         proc, self.proc = self.proc, None
         if proc is not None and proc.poll() is None:
@@ -303,13 +263,6 @@ class YesDev(rumps.App):
                 pass
         self.disarm_at = None
 
-    def restart_engine(self) -> None:
-        """Apply an option that the engine reads only at startup."""
-        if self.cfg["enabled"] and not self.paused_reason:
-            self.stop_engine()
-            time.sleep(0.2)
-            self.start_engine()
-
     # ---------- focus guard lifetime ----------
     #
     # The guard lives only while the engine is approving. With the engine off,
@@ -323,6 +276,11 @@ class YesDev(rumps.App):
         return bool(self.cfg.get("quiet_focus")) and self.engine_running() and not self.cfg["observe_only"]
 
     def sync_guard(self) -> None:
+        if self.guard_wanted() and self.cfg.get("relay_enabled"):
+            self.stop_guard()
+            self.start_relay()
+            return
+        self.stop_relay()
         if self.guard_wanted():
             if not self.guard_running():
                 self.start_guard()
@@ -354,6 +312,50 @@ class YesDev(rumps.App):
                     pass
             except Exception:
                 pass
+
+    def start_relay(self) -> None:
+        if self.relay is not None and self.relay.poll() is None:
+            return
+        if time.monotonic() < self._relay_retry_at:
+            return
+        self._relay_retry_at = time.monotonic() + 10
+        args = [sys.executable, str(RELAY), "--profile", self.cfg["relay_profile"],
+                "--port", str(self.cfg["relay_port"]), "--exit-with-parent"]
+        try:
+            self.relay = subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            log(f"relay started pid={self.relay.pid}")
+        except Exception as exc:
+            log(f"relay failed to start: {exc!r}")
+
+    def stop_relay(self) -> None:
+        proc, self.relay = self.relay, None
+        if proc is not None:
+            self._relay_retry_at = 0
+        if proc is not None and proc.poll() is None:
+            try:
+                proc.terminate()
+                proc.wait(timeout=4)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait()
+            except Exception as exc:
+                log(f"relay shutdown: {exc!r}")
+
+    def relay_status_text(self) -> str:
+        if not self.cfg.get("relay_enabled"):
+            return "Fast focus: off"
+        if not self.guard_wanted():
+            return "Fast focus: paused while approval is off or observing"
+        try:
+            status = json.loads(RELAY_STATUS.read_text())
+            if self.relay is not None and status.get("pid") == self.relay.pid:
+                if status.get("last_error"):
+                    return "Fast focus: " + status["last_error"]
+                if status.get("state") == "listening" and self.relay.poll() is None:
+                    return f"Fast focus: ready · {status.get('connections', 0)} connected"
+        except (OSError, ValueError):
+            pass
+        return "Fast focus: starting — check the relay log if this persists"
 
     # ---------- background loop ----------
 
@@ -543,48 +545,14 @@ class YesDev(rumps.App):
     def _build_menu(self) -> None:
         self.mi_status = rumps.MenuItem("Status: starting")
         self.mi_count = rumps.MenuItem("Approved: 0")
-        self.mi_access = rumps.MenuItem("Accessibility: checking",
-                                        callback=self.on_grant_accessibility)
+        self.mi_access = rumps.MenuItem("Accessibility: checking", callback=self.on_grant_accessibility)
         self.mi_on = rumps.MenuItem("On", callback=self.on_toggle_enabled)
-        self.mi_autostart = rumps.MenuItem("Start at login",
-                                           callback=self.on_toggle_autostart)
-        self.mi_observe = rumps.MenuItem("Observe only (log, don't click)",
-                                         callback=self.on_toggle("observe_only", restart=True))
-        self.mi_edge = rumps.MenuItem("Include Microsoft Edge",
-                                      callback=self.on_toggle("include_edge", restart=True))
-        self.mi_quiet = rumps.MenuItem("Quiet focus (experimental)",
-                                       callback=self.on_toggle("quiet_focus"))
-
-        # Radio groups: rumps has no radio flag, so the check marks are managed
-        # in refresh() from the config, which is the single source of truth.
-        self.radios: dict[str, list[tuple[rumps.MenuItem, object]]] = {}
-
-        def group(key: str, choices, restart: bool = False):
-            items = []
-            for label, value in choices:
-                item = rumps.MenuItem(label, callback=self.on_set(key, value, restart))
-                items.append((item, value))
-            self.radios[key] = items
-            return [i for i, _ in items]
-
+        self.mi_relay = rumps.MenuItem("Fast focus: off")
         self.menu = [
-            self.mi_status,
-            self.mi_count,
-            self.mi_access,
-            None,
-            self.mi_on,
-            self.mi_autostart,
-            None,
-            ["Stay on for", group("arm_minutes", ARM_CHOICES)],
-            ["Speed", group("poll_ms", POLL_CHOICES, restart=True)],
-            ["Approve notice", group("notify_style", NOTIFY_CHOICES)],
-            ["Pause on burst", group("burst_limit", BURST_CHOICES)
-                               + [None] + group("burst_action", BURST_ACTIONS)],
-            ["Options", [self.mi_observe, self.mi_edge, self.mi_quiet]],
-            None,
+            self.mi_status, self.mi_count, self.mi_access, None, self.mi_on,
+            rumps.MenuItem("Settings…", callback=self.on_settings), self.mi_relay, None,
             rumps.MenuItem("Open log", callback=self.on_open(LOG_PATH)),
-            rumps.MenuItem("Open config", callback=self.on_open(CONFIG_PATH)),
-            None,
+            rumps.MenuItem("Open relay log", callback=self.on_open(DATA_DIR / "relay.log")), None,
             rumps.MenuItem("Quit", callback=self.on_quit),
         ]
 
@@ -633,18 +601,53 @@ class YesDev(rumps.App):
                                     else "Accessibility: NOT granted - click to fix")
 
             self.mi_on.state = 1 if (self.cfg["enabled"] and not self.paused_reason) else 0
-            self.mi_autostart.state = 1 if platform_mac.autostart_enabled() else 0
-            self.mi_observe.state = 1 if self.cfg["observe_only"] else 0
-            self.mi_edge.state = 1 if self.cfg["include_edge"] else 0
-            self.mi_quiet.state = 1 if self.cfg.get("quiet_focus") else 0
-            for key, items in self.radios.items():
-                for item, value in items:
-                    item.state = 1 if self.cfg.get(key) == value else 0
+            self.mi_relay.title = self.relay_status_text()
+            if self._settings is not None and self._settings.window.isVisible():
+                self._settings.refresh_status()
         except Exception:
             import traceback
             log(f"refresh error: {traceback.format_exc()}")
 
     # ---------- menu actions ----------
+
+    def on_settings(self, _item=None) -> None:
+        if self._settings is None:
+            from settings_mac import SettingsWindow
+            self._settings = SettingsWindow(self)
+        self._settings.show()
+
+    def apply_settings(self, values, start_at_login) -> None:
+        """Commit validated values before reconciling the running helpers."""
+        old = dict(self.cfg)
+        save_atomic(CONFIG_PATH, values)  # errors stay visible in Settings
+        self.cfg.clear()
+        self.cfg.update(values)
+        if old["enabled"] != values["enabled"]:
+            self.paused_reason = self.resume_at = self.allow_until = None
+            self.recent.clear()
+        restart = any(old.get(key) != values.get(key) for key in
+                      ("poll_ms", "observe_only", "include_edge", "diagnostics"))
+        if not values["enabled"] or self.paused_reason:
+            self.stop_engine()
+        elif restart or not self.engine_running():
+            self.stop_engine()
+            self.start_engine()
+        if any(old.get(key) != values.get(key) for key in ("relay_enabled", "relay_port", "relay_profile")):
+            self.stop_relay()
+            self._relay_retry_at = 0
+        if old["arm_minutes"] != values["arm_minutes"] and self.engine_running():
+            mins = values["arm_minutes"]
+            self.disarm_at = datetime.now() + timedelta(minutes=mins) if mins else None
+        self.sync_guard()
+        self.refresh()
+        if start_at_login != platform_mac.autostart_enabled():
+            try:
+                if start_at_login:
+                    platform_mac.enable_autostart(Path(__file__).resolve())
+                else:
+                    platform_mac.disable_autostart()
+            except Exception as exc:
+                raise RuntimeError(f"Settings saved, but Start at login could not be changed: {exc}") from exc
 
     def on_toggle_enabled(self, _item) -> None:
         self.cfg["enabled"] = not self.cfg["enabled"]
@@ -657,35 +660,6 @@ class YesDev(rumps.App):
             self.start_engine()
         else:
             self.stop_engine()
-        self.refresh()
-
-    def on_toggle(self, key: str, restart: bool = False):
-        def handler(_item) -> None:
-            self.cfg[key] = not self.cfg.get(key)
-            self.cfg.save()
-            if restart:
-                self.restart_engine()
-            self.sync_guard()
-            self.refresh()
-        return handler
-
-    def on_set(self, key: str, value, restart: bool = False):
-        def handler(_item) -> None:
-            self.cfg[key] = value
-            self.cfg.save()
-            if key == "arm_minutes":
-                mins = int(value or 0)
-                self.disarm_at = datetime.now() + timedelta(minutes=mins) if mins else None
-            if restart:
-                self.restart_engine()
-            self.refresh()
-        return handler
-
-    def on_toggle_autostart(self, _item) -> None:
-        if platform_mac.autostart_enabled():
-            platform_mac.disable_autostart()
-        else:
-            platform_mac.enable_autostart(Path(__file__).resolve())
         self.refresh()
 
     def on_grant_accessibility(self, _item) -> None:
@@ -730,6 +704,9 @@ class YesDev(rumps.App):
 
 
 def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--settings", action="store_true", help="open the settings window on launch")
+    opts = parser.parse_args()
     # One tray instance; a second would fight the first over the engine.
     if not platform_mac.acquire_single_instance("tray"):
         log("another instance is already running - exiting")
@@ -766,6 +743,12 @@ def main() -> int:
             pass
 
     rumps.Timer(app._tick, 1).start()
+    if opts.settings:
+        # Wait until rumps has created the status item and finished launching.
+        def show_settings(timer):
+            timer.stop()
+            app.on_settings()
+        rumps.Timer(show_settings, .25).start()
     try:
         app.run()
     finally:

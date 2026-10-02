@@ -22,7 +22,10 @@ BUNDLE_ID = "com.dev-newb.yesdev"
 # %LOCALAPPDATA%\YesDev on Windows; its macOS counterpart. One directory holds
 # the config and both logs, matching the Windows layout so the tray/engine
 # contract ("[ACTION]" lines in yes-dev.log) ports unchanged.
-DATA_DIR = Path.home() / "Library" / "Application Support" / "YesDev"
+# Explicit development override keeps native UI/lifecycle tests out of the
+# user's settings and logs. Child helpers inherit the same directory.
+DATA_DIR = Path(os.environ.get("YESDEV_DATA_DIR", str(
+    Path.home() / "Library" / "Application Support" / "YesDev"))).expanduser()
 CONFIG_PATH = DATA_DIR / "config.json"
 LOG_PATH = DATA_DIR / f"{APP_SLUG}.log"
 TRAY_LOG = DATA_DIR / "tray.log"
