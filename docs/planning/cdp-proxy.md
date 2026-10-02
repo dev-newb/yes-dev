@@ -127,8 +127,11 @@ client that enabled discovery; everything else is session-scoped.
    are renumbered per client and stale replies and events dropped, and a client
    arriving while the connection is lent gets its own upstream connection
    instead of waiting or being refused. On release the relay undoes
-   browser-level settings, detaches sessions and disposes contexts. Tested
-   against a scripted fake Chrome; not yet against real Chrome and real tools.
+   browser-level settings, detaches sessions, disposes the contexts Chrome
+   itself would, and retires the connection if any of that fails. Run live
+   against Chrome 154 with Playwright and Puppeteer on 2026-10-02, which found
+   two bugs (auto-attach reset refused without `flatten`; `Browser.close` from a
+   concurrent client) that are now fixed and pinned by tests.
 2. **Concurrent clients with ownership.** Id mapping, session routing, the
    ownership rule for auto-attach, discovery fan-out, per-client cleanup.
    The bulk of the work. Needs a test matrix, below.

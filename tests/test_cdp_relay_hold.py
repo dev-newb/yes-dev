@@ -13,7 +13,9 @@ import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import cdp_relay
 from cdp_relay import Relay, RELAY_PATH
+from unittest.mock import patch
 from test_cdp_relay import RecordingFocus
 from websockets.asyncio.client import connect
 from websockets.asyncio.server import serve
@@ -21,7 +23,14 @@ from websockets.exceptions import ConnectionClosed
 
 
 class FakeChrome:
-    """Answers every call; a few methods behave like Chrome's."""
+    """Answers every call; the methods the relay depends on behave like Chrome 154's.
+
+    Strict where real Chrome was strict in the 2026-10-02 live run: browser-level
+    auto-attach without flatten is refused with Chrome's own error, and
+    detaching a session it does not have is an error. Tests can make it refuse
+    or ignore other calls, and Browser.close ends every connection, as Chrome
+    exiting would.
+    """
 
     def __init__(self):
         self.connections = 0
@@ -30,6 +39,10 @@ class FakeChrome:
         self.wire_ids = []         # (method, id) as Chrome saw them
         self.sessions = 0
         self.contexts = 0
+        self.live_sessions = set()
+        self.auto_attach = {}      # connection number -> browser-level auto-attach on?
+        self.refuse = lambda method, params: None   # -> error dict to send instead
+        self.ignore = lambda method, params: False  # -> never answer this call
 
     async def __call__(self, ws):
         self.connections += 1
@@ -46,15 +59,41 @@ class FakeChrome:
                         params["seconds"], lambda m=message: asyncio.ensure_future(
                             ws.send(json.dumps({"id": m["id"], "result": {"late": m["params"]["value"]}}))))
                     continue
+                error = self.refuse(method, params)
+                if "sessionId" not in message and method == "Target.setAutoAttach" \
+                        and params.get("flatten") is not True:
+                    error = {"code": -32602,
+                             "message": "Only flatten protocol is supported with browser level auto-attach"}
+                if method == "Target.detachFromTarget" and params.get("sessionId") not in self.live_sessions:
+                    error = {"code": -32602, "message": "No session with given id"}
+                if error is not None:
+                    await ws.send(json.dumps({"id": message["id"], "error": error}))
+                    continue
+                if self.ignore(method, params):
+                    continue
+                if method == "Browser.close":
+                    for other in list(self.sockets):
+                        await other.close(1011, "browser exited")
+                    return
                 if method == "Test.emit":
                     await ws.send(json.dumps(params["event"]))
+                    result = {}
+                elif method == "Test.forget":     # the session vanished without telling anyone
+                    self.live_sessions.discard(params["sessionId"])
                     result = {}
                 elif method == "Test.closeMe":
                     await ws.close(1012, "restarting")
                     return
                 elif method in ("Target.attachToTarget", "Target.attachToBrowserTarget"):
                     self.sessions += 1
+                    self.live_sessions.add(f"S{self.sessions}")
                     result = {"sessionId": f"S{self.sessions}"}
+                elif method == "Target.detachFromTarget":
+                    self.live_sessions.discard(params["sessionId"])
+                    result = {}
+                elif method == "Target.setAutoAttach" and "sessionId" not in message:
+                    self.auto_attach[number] = params["autoAttach"]
+                    result = {}
                 elif method == "Target.createBrowserContext":
                     self.contexts += 1
                     result = {"browserContextId": f"C{self.contexts}"}
@@ -157,7 +196,8 @@ class HeldRelayTests(unittest.IsolatedAsyncioTestCase):
         await self.call(a, "Target.setDiscoverTargets", {"discover": True})
         await self.call(a, "Target.setAutoAttach", {"autoAttach": True, "waitForDebuggerOnStart": True, "flatten": True})
         session = (await self.call(a, "Target.attachToTarget", {"targetId": "T1", "flatten": True}))["result"]["sessionId"]
-        context = (await self.call(a, "Target.createBrowserContext"))["result"]["browserContextId"]
+        context = (await self.call(a, "Target.createBrowserContext",
+                                   {"disposeOnDetach": True}))["result"]["browserContextId"]
         await self.call(a, "Browser.setDownloadBehavior", {"behavior": "allow", "downloadPath": "/tmp/x"})
         await self.call(a, "Fetch.enable", {"patterns": []})
         await self.call(a, "Runtime.enable", session=session)   # session state: undone by detaching
@@ -165,16 +205,20 @@ class HeldRelayTests(unittest.IsolatedAsyncioTestCase):
         await self.leave(a)
         undo = self.chrome.methods(before)
         self.assertIn(("Target.setDiscoverTargets", {"discover": False}), undo)
-        self.assertIn(("Target.setAutoAttach", {"autoAttach": False, "waitForDebuggerOnStart": False}), undo)
+        self.assertIn(("Target.setAutoAttach", {"autoAttach": False, "waitForDebuggerOnStart": False,
+                                                "flatten": True}), undo)
         self.assertIn(("Browser.setDownloadBehavior", {"behavior": "default"}), undo)
         self.assertIn(("Fetch.disable", {}), undo)
         self.assertIn(("Target.detachFromTarget", {"sessionId": session}), undo)
         self.assertIn(("Target.disposeBrowserContext", {"browserContextId": context}), undo)
         # settings are switched off before sessions go, so nothing new auto-attaches meanwhile
-        self.assertLess(undo.index(("Target.setAutoAttach", {"autoAttach": False, "waitForDebuggerOnStart": False})),
+        self.assertLess(undo.index(("Target.setAutoAttach", {"autoAttach": False, "waitForDebuggerOnStart": False,
+                                                             "flatten": True})),
                         undo.index(("Target.detachFromTarget", {"sessionId": session})))
+        self.assertTrue(self.relay.held.open, "a clean reset should keep the connection")
 
     async def test_auto_attached_sessions_are_detached_too(self):
+        self.chrome.live_sessions.add("AUTO1")
         a = await self.client()
         event = {"method": "Target.attachedToTarget",
                  "params": {"sessionId": "AUTO1", "targetInfo": {"targetId": "T9"}, "waitingForDebugger": False}}
@@ -274,6 +318,80 @@ class HeldRelayTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.chrome.connections, 0)
         self.assertIsNone(self.relay.held.owner)
         self.assertFalse(self.relay.held.lock.locked())
+
+    async def test_auto_attach_is_really_off_for_the_next_client(self):
+        """The live failure: Playwright left auto-attach on and the next page hung."""
+        a = await self.client()
+        await self.call(a, "Target.setAutoAttach", {"autoAttach": True, "waitForDebuggerOnStart": True, "flatten": True})
+        self.assertTrue(self.chrome.auto_attach[1])
+        await self.leave(a)
+        self.assertFalse(self.chrome.auto_attach[1], "Chrome still auto-attaches for the departed client")
+        b = await self.client()
+        await self.call(b, "Runtime.evaluate")
+        self.assertEqual(self.chrome.connections, 1)
+
+    async def test_a_refused_reset_retires_the_connection(self):
+        self.chrome.refuse = lambda method, params: (
+            {"code": -32000, "message": "refused"}
+            if method == "Browser.setDownloadBehavior" and params.get("behavior") == "default" else None)
+        a = await self.client()
+        await self.call(a, "Browser.setDownloadBehavior", {"behavior": "allow", "downloadPath": "/tmp/x"})
+        await self.leave(a)
+        self.assertFalse(self.relay.held.open)
+        self.assertFalse(self.statuses[-1].get("held"))
+        b = await self.client()
+        await self.call(b, "Runtime.evaluate")
+        self.assertEqual(self.chrome.connections, 2, "the next client inherited an unreset connection")
+        self.assertEqual(self.focus.calls, 2)
+
+    async def test_an_unanswered_reset_retires_the_connection(self):
+        self.chrome.ignore = lambda method, params: (
+            method == "Target.setDiscoverTargets" and params.get("discover") is False)
+        a = await self.client()
+        await self.call(a, "Target.setDiscoverTargets", {"discover": True})
+        with patch.object(cdp_relay, "HOLD_RESET_TIMEOUT", .2):
+            await self.leave(a)
+        self.assertFalse(self.relay.held.open)
+        b = await self.client()
+        await self.call(b, "Runtime.evaluate")
+        self.assertEqual(self.chrome.connections, 2)
+
+    async def test_a_session_that_was_already_gone_does_not_retire_the_connection(self):
+        a = await self.client()
+        session = (await self.call(a, "Target.attachToTarget", {"targetId": "T1", "flatten": True}))["result"]["sessionId"]
+        await self.call(a, "Test.forget", {"sessionId": session})
+        await self.leave(a)
+        self.assertTrue(self.relay.held.open)
+        b = await self.client()
+        await self.call(b, "Runtime.evaluate")
+        self.assertEqual(self.chrome.connections, 1)
+
+    async def test_contexts_follow_chromes_own_rule(self):
+        a = await self.client()
+        disposed = (await self.call(a, "Target.createBrowserContext",
+                                    {"disposeOnDetach": True}))["result"]["browserContextId"]
+        kept = [(await self.call(a, "Target.createBrowserContext", params))["result"]["browserContextId"]
+                for params in ({}, {"disposeOnDetach": False})]
+        before = len(self.chrome.received)
+        await self.leave(a)
+        undo = self.chrome.methods(before)
+        self.assertIn(("Target.disposeBrowserContext", {"browserContextId": disposed}), undo)
+        for context in kept:
+            self.assertNotIn(("Target.disposeBrowserContext", {"browserContextId": context}), undo)
+
+    async def test_a_concurrent_clients_browser_close_does_not_close_chrome(self):
+        """The live failure: the fallback path forwarded Browser.close and Chrome exited."""
+        a = await self.client()
+        await self.call(a, "Runtime.evaluate", {"v": "held"})
+        b = await self.client()
+        await self.call(b, "Runtime.evaluate", {"v": "own"})
+        self.assertEqual(self.chrome.connections, 2)
+        reply = await self.call(b, "Browser.close")
+        self.assertEqual(reply["result"], {})
+        await asyncio.wait_for(b.wait_closed(), 2)
+        self.assertEqual(b.close_code, 1000)
+        self.assertNotIn("Browser.close", [m for _, m, _ in self.chrome.received])
+        self.assertEqual((await self.call(a, "Runtime.evaluate", {"v": "still"}))["result"]["echo"], {"v": "still"})
 
     async def test_status_reports_the_held_connection(self):
         a = await self.client()

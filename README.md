@@ -255,17 +255,25 @@ restore; recent input permits the connection without returning focus.
 On its own, fast focus still creates one consent prompt per client connection.
 Tick **Keep one Chrome connection open** in the same tab to stop that: the
 relay keeps the first approved connection open and lends it to one client at a
-time, so Chrome asks once per launch and later clients cause no prompt and no
-blink. Message ids are renumbered per client, so nothing in flight for a client
-that left reaches the next one. When a client leaves, the relay undoes what it
+time, so Chrome asks once per launch. That removes the repeated prompts, not
+every reason Chrome comes forward: a tool that opens a page in the foreground
+still brings Chrome to the front, as it would over any connection.
+
+Message ids are renumbered per client, so nothing in flight for a client that
+left reaches the next one. When a client leaves, the relay undoes what it
 changed in the browser: target discovery and auto-attach, download behavior,
-request interception, certificate errors, permissions, its sessions and the
-browser contexts it created. Tabs it opened stay open. `Browser.close` ends
-that client, never your Chrome. A client that connects while the connection is
-in use gets its own connection and its own prompt. Chrome shows its automation
-banner for as long as the connection is held. Clients that talk to each other
-through shared browser state, rather than taking turns, need the multiplexed
-proxy in `docs/planning/cdp-proxy.md`, which is still a plan.
+request interception, certificate errors and permissions, then its sessions.
+Browser contexts are disposed exactly when Chrome itself would dispose them on
+a disconnect, which is when they were created with `disposeOnDetach: true`
+(Playwright's are). Tabs it opened stay open. If Chrome refuses any of that
+cleanup, or does not answer, the relay closes the held connection rather than
+hand the next client a browser in an unknown state; the next client then costs
+one prompt. While hold is on, `Browser.close` from any client ends that client,
+never your Chrome. A client that connects while the connection is in use gets
+its own connection and its own prompt. Chrome shows its "controlled by
+automated test software" banner for as long as the connection is held. Clients
+that need to work at the same time on one connection need the multiplexed proxy
+in `docs/planning/cdp-proxy.md`, which is still a plan.
 
 The icon is green when armed, amber when observing, grey when off, red when
 paused, and carries a running approval count - in the tooltip on Windows, in the

@@ -32,7 +32,24 @@ RELAY_PATH = "/devtools/browser/yesdev"
 MAX_MESSAGE = 64 * 1024 * 1024
 HOLD_RESET_TIMEOUT = 2.0   # seconds to undo a departed client's state
 HOLD_RESET_ROUNDS = 3      # sessions can attach while the first round runs
+# Cleanup whose failure only means the thing was already gone: a session that
+# detached itself, a context its client disposed. Any other failed reset leaves
+# state behind that the next client would inherit, so the connection is retired.
+IDEMPOTENT_CLEANUP = ("Target.detachFromTarget", "Target.disposeBrowserContext")
 _CLOSE_CODES = (1000, 1001, 1008, 1009, 1011, 1012, 1013)
+
+
+def _is_browser_close(raw):
+    """Browser.close in any frame, parsed only when the text could hold it."""
+    if not isinstance(raw, str) or "Browser.close" not in raw:
+        return None
+    try:
+        message = json.loads(raw)
+    except ValueError:
+        return None
+    if isinstance(message, dict) and message.get("method") == "Browser.close":
+        return message
+    return None
 
 
 def _close_code(code):
@@ -51,7 +68,11 @@ def _reset_for(method, params):
     if method == "Target.setDiscoverTargets":
         return "Target.setDiscoverTargets", {"discover": False}
     if method == "Target.setAutoAttach":
-        return "Target.setAutoAttach", {"autoAttach": False, "waitForDebuggerOnStart": False}
+        # Chrome rejects browser-level auto-attach without flatten, even to turn
+        # it off (-32602, seen live on 154.0.8037.97), and the client's setting
+        # then survives into the next client's session.
+        return "Target.setAutoAttach", {"autoAttach": False, "waitForDebuggerOnStart": False,
+                                        "flatten": True}
     if method == "Browser.setDownloadBehavior":
         return "Browser.setDownloadBehavior", {"behavior": "default", **context}
     if method == "Fetch.enable":
@@ -158,6 +179,28 @@ class Relay:
             # Preserve ordinary close codes, including a normal client detach.
             await destination.close(_close_code(source.close_code))
 
+    @staticmethod
+    async def forward_guarded(source, destination):
+        """Client to Chrome while Chrome is shared: Browser.close ends this client.
+
+        With hold on, a second client's own connection reaches the same Chrome
+        as the held one, so its Browser.close would close the browser under
+        everyone. Without hold the relay stays a plain pipe, as direct.
+        """
+        try:
+            async for message in source:
+                close = _is_browser_close(message)
+                if close is not None:
+                    if isinstance(close.get("id"), int):
+                        await source.send(json.dumps({"id": close["id"], "result": {}}))
+                    await source.close(1000, "Browser.close ends this client; Chrome stays open")
+                    return
+                await destination.send(message)
+        except ConnectionClosed:
+            pass
+        finally:
+            await destination.close(_close_code(source.close_code))
+
     async def handle(self, downstream):
         if len(self.clients) >= self.max_clients:
             await downstream.close(1013, "Relay is busy")
@@ -219,7 +262,8 @@ class Relay:
             upstream = opening.result()
             self.status(last_error="")
             LOGGER.info("Client connected (%s active)", len(self.clients))
-            pumps = [asyncio.create_task(self.forward(downstream, upstream)),
+            outbound = self.forward_guarded if self.held is not None else self.forward
+            pumps = [asyncio.create_task(outbound(downstream, upstream)),
                      asyncio.create_task(self.forward(upstream, downstream))]
             await asyncio.wait(pumps, return_when=asyncio.FIRST_COMPLETED)
         except asyncio.CancelledError:
@@ -324,16 +368,31 @@ class HeldConnection:
         self.generation += 1
         self.reset_done.clear()
         try:
-            await self.reset()
-        except Exception as exc:
-            LOGGER.warning("Could not reset the held connection: %s", exc)
+            try:
+                clean = await self.reset()
+            except Exception as exc:
+                LOGGER.warning("Could not reset the held connection: %s", exc)
+                clean = False
+            if not clean and self.upstream is not None:
+                # Whatever the client left behind is still in effect. Closing the
+                # connection makes Chrome drop all of it; the next client pays
+                # one prompt instead of inheriting it.
+                LOGGER.warning("Retiring the held connection: its reset did not complete")
+                await self.close_upstream()
+                self.relay.status(held=False)
         finally:
             self.reset_done.set()
 
     async def reset(self):
-        """Undo the departed client's browser settings, then detach its sessions."""
+        """Undo the departed client's browser settings, then detach its sessions.
+
+        True only when every reset was accepted. A session or context that was
+        already gone counts as cleaned; any other error, or no answer within
+        HOLD_RESET_TIMEOUT, does not.
+        """
         calls = list(self.resets.values())
         self.resets.clear()
+        clean = True
         for _ in range(HOLD_RESET_ROUNDS):
             calls += [("Target.detachFromTarget", {"sessionId": s}) for s in sorted(self.sessions)]
             calls += [("Target.disposeBrowserContext", {"browserContextId": c}) for c in sorted(self.contexts)]
@@ -342,14 +401,23 @@ class HeldConnection:
             self.retired.update(self.sessions)
             self.sessions.clear()
             self.contexts.clear()
-            if not calls or not self.open:
-                return
-            futures = [await self.call(method, params) for method, params in calls]
-            _, late = await asyncio.wait(futures, timeout=HOLD_RESET_TIMEOUT)
+            if not calls:
+                return clean
+            if not self.open:
+                return False
+            sent = [(method, await self.call(method, params)) for method, params in calls]
+            _, late = await asyncio.wait([future for _, future in sent], timeout=HOLD_RESET_TIMEOUT)
             for future in late:
                 future.cancel()
+            for method, future in sent:
+                if future in late or future.cancelled():
+                    clean = False
+                elif "error" in future.result() and method not in IDEMPOTENT_CLEANUP:
+                    LOGGER.warning("Chrome refused %s: %s", method, future.result()["error"])
+                    clean = False
             LOGGER.info("Reset the held connection: %s calls, %s unanswered", len(calls), len(late))
             calls = []   # next round only if a session attached meanwhile
+        return clean
 
     async def call(self, method, params):
         self.next_id += 1
@@ -392,7 +460,11 @@ class HeldConnection:
             return
         if isinstance(result.get("sessionId"), str):
             self.sessions[result["sessionId"]] = generation
-        if method == "Target.createBrowserContext" and isinstance(result.get("browserContextId"), str):
+        # Chrome disposes a context on disconnect only when it was created with
+        # disposeOnDetach: true (measured on 154). Do the same and no more, so
+        # a held connection keeps exactly what a direct one would keep.
+        if (method == "Target.createBrowserContext" and params.get("disposeOnDetach") is True
+                and isinstance(result.get("browserContextId"), str)):
             self.contexts.add(result["browserContextId"])
         if method == "Target.disposeBrowserContext":
             self.contexts.discard(params.get("browserContextId"))
