@@ -83,6 +83,25 @@ class TraySettingsTests(unittest.TestCase):
         stop.assert_not_called()
         self.assertIs(self.app.disarm_at, timer)
 
+    def test_hold_is_passed_to_the_relay_only_when_set(self):
+        for hold in (False, True):
+            with self.subTest(hold=hold):
+                self.app.relay = None
+                self.app._relay_retry_at = 0
+                self.app.cfg.update(relay_hold=hold)
+                with patch.object(tray.subprocess, "Popen") as popen:
+                    self.app.start_relay()
+                self.assertEqual("--hold" in popen.call_args.args[0], hold)
+
+    def test_changing_hold_restarts_the_relay(self):
+        relay = Mock()
+        relay.poll.return_value = None
+        self.app.relay = relay
+        with patch.object(self.app, "sync_guard"):
+            self.app.apply_settings({**self.app.cfg, "relay_hold": True}, False)
+        relay.terminate.assert_called_once()
+        self.assertIsNone(self.app.relay)
+
 
 if __name__ == "__main__":
     unittest.main()

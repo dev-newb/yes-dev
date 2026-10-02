@@ -321,6 +321,8 @@ class YesDev(rumps.App):
         self._relay_retry_at = time.monotonic() + 10
         args = [sys.executable, str(RELAY), "--profile", self.cfg["relay_profile"],
                 "--port", str(self.cfg["relay_port"]), "--exit-with-parent"]
+        if self.cfg.get("relay_hold"):
+            args.append("--hold")
         try:
             self.relay = subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             log(f"relay started pid={self.relay.pid}")
@@ -352,7 +354,8 @@ class YesDev(rumps.App):
                 if status.get("last_error"):
                     return "Fast focus: " + status["last_error"]
                 if status.get("state") == "listening" and self.relay.poll() is None:
-                    return f"Fast focus: ready · {status.get('connections', 0)} connected"
+                    held = " · Chrome connection held" if status.get("held") else ""
+                    return f"Fast focus: ready{held} · {status.get('connections', 0)} connected"
         except (OSError, ValueError):
             pass
         return "Fast focus: starting — check the relay log if this persists"
@@ -632,7 +635,8 @@ class YesDev(rumps.App):
         elif restart or not self.engine_running():
             self.stop_engine()
             self.start_engine()
-        if any(old.get(key) != values.get(key) for key in ("relay_enabled", "relay_port", "relay_profile")):
+        if any(old.get(key) != values.get(key) for key in
+               ("relay_enabled", "relay_port", "relay_profile", "relay_hold")):
             self.stop_relay()
             self._relay_retry_at = 0
         if old["arm_minutes"] != values["arm_minutes"] and self.engine_running():

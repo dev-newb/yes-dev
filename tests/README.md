@@ -193,6 +193,29 @@ SIGTERM check and the verification pair both confirmed orderly exit and runtime
 cleanup. Policy tests cover intervening input, expiry, identity changes and
 disconnects; deliberate user input was not part of this live comparison.
 
+## Held connection (macOS)
+
+`tests/test_cdp_relay_hold.py` runs the relay with `hold=True` against a
+scripted fake Chrome on loopback. The fake answers every call, hands out
+session and browser-context ids the way Chrome does, can emit events and late
+replies on request, and records everything it receives with the ids it saw.
+Fifteen tests cover one prompt for sequential clients, per-client id
+renumbering, a departed client's late reply and stale session events never
+reaching the next client, the undo list and its order (browser settings off
+before sessions detach), auto-attached sessions, sessions the client detached
+itself, `Browser.close`, a concurrent client falling back to its own
+connection, losing Chrome, a Chrome restart between clients, malformed
+messages, a client leaving while Chrome is still being asked, status
+reporting, and shutdown. Six deliberate breakages of `cdp_relay.py` were each
+caught by the matching test on 2026-10-02. None of this involves real Chrome.
+
+`tests/mac/test_early_focus_events.py` covers the early-focus helper's
+event-driven loop with a real run loop and real Unix sockets: servicing
+without a timer, two messages in one read, the hold limit, closing a socket's
+run-loop source before the socket, and the fast tick running only while a
+request is armed. `tests/mac/test_approve_no_raise.py` pins the approval path
+to a single press, with no window raised.
+
 ## Thin relay integration (macOS)
 
 `relay_mac.py` runs the local relay; the tray starts it when Fast focus is

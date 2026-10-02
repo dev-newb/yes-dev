@@ -250,9 +250,22 @@ and disconnects its clients. The relay resumes with approval; clients reconnect.
 
 This is an experimental shortcut based on request timing, not proof that a
 particular activation belongs to a consent sheet. Input after arming cancels the
-restore; recent input permits the connection without returning focus. It still
-creates one consent prompt per client connection. The persistent, multiplexed
-proxy in `docs/planning/cdp-proxy.md` is separate work.
+restore; recent input permits the connection without returning focus.
+
+On its own, fast focus still creates one consent prompt per client connection.
+Tick **Keep one Chrome connection open** in the same tab to stop that: the
+relay keeps the first approved connection open and lends it to one client at a
+time, so Chrome asks once per launch and later clients cause no prompt and no
+blink. Message ids are renumbered per client, so nothing in flight for a client
+that left reaches the next one. When a client leaves, the relay undoes what it
+changed in the browser: target discovery and auto-attach, download behavior,
+request interception, certificate errors, permissions, its sessions and the
+browser contexts it created. Tabs it opened stay open. `Browser.close` ends
+that client, never your Chrome. A client that connects while the connection is
+in use gets its own connection and its own prompt. Chrome shows its automation
+banner for as long as the connection is held. Clients that talk to each other
+through shared browser state, rather than taking turns, need the multiplexed
+proxy in `docs/planning/cdp-proxy.md`, which is still a plan.
 
 The icon is green when armed, amber when observing, grey when off, red when
 paused, and carries a running approval count - in the tooltip on Windows, in the

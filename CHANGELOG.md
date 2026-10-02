@@ -3,6 +3,59 @@
 Newest first. Each entry says what changed and, where it matters, what was
 measured - the numbers are from this repo's own runs, not estimates.
 
+## Unreleased
+
+### macOS: hold one Chrome connection, so Chrome asks once per launch
+
+A new option under **Settings… → Focus & connection**, off by default:
+**Keep one Chrome connection open**. With fast focus on, the relay keeps the
+first approved Chrome connection open and lends it to one client at a time.
+Later clients reuse it, so Chrome prompts once per launch instead of once per
+client, and there is no focus blink at all after the first. A client that
+connects while another holds the connection gets its own connection and its
+own prompt, as before.
+
+Taking turns on one connection needs care, because Chrome cannot tell the
+clients apart. Every message id is renumbered on the way in and restored on
+the way out, so a reply still in flight when a client leaves is dropped
+rather than delivered to the next one, and so are events from that client's
+sessions. When a client leaves, the relay switches off the browser-level
+settings it changed (target discovery, auto-attach, download behavior,
+request interception, certificate errors, permissions), then detaches its
+sessions and disposes the browser contexts it created, before lending the
+connection again. Tabs it opened stay open, as after a direct disconnect.
+`Browser.close` from a client ends that client only, never your Chrome.
+
+Chrome shows its "controlled by automated test software" banner for as long
+as the connection is held. That is the trade for the missing prompts.
+
+Fifteen loopback tests run against a scripted fake Chrome and cover reuse,
+renumbering, late replies, the undo list and its order, auto-attached
+sessions, stale events, `Browser.close`, a concurrent second client, losing
+Chrome, a Chrome restart, malformed messages, and shutdown. Six deliberate
+breakages of the relay were each caught by the matching test. Not yet run
+against real Chrome or real agent tools.
+
+### macOS: the fast-focus helper no longer polls
+
+The early-focus helper checked its control socket on a 5 ms timer and woke
+every 50 ms to notice signals, about 220 times a second for as long as fast
+focus was on. It now sleeps until a socket, a signal or an app activation
+needs it, and ticks quickly only while a connection request is armed, which
+lasts at most two seconds. Idle for 15 seconds on this Mac, the helper went
+from about 2% CPU to none measurable. It answered a control message in under
+a millisecond and exited 25 ms after SIGTERM, removing its runtime files.
+
+### macOS: the sheet's window is no longer raised before Allow is pressed
+
+The engine raised the consent sheet's Chrome window before every press, a
+leftover from when the fallback was a pointer click. Neither the press nor
+the keystroke needs it, and it reordered your Chrome windows: the one with
+the sheet jumped above the one you were using. First proposed in
+[#7](https://github.com/dev-newb/yes-dev/pull/7). A sheet that disappears
+without a successful press is now logged as `AlreadyDismissed` rather than
+credited to a raise.
+
 ## 1.3.0 - 2026-10-02
 
 macOS: a native Settings window, fast focus through a local relay, and an engine

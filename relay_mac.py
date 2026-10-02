@@ -139,7 +139,7 @@ class Status:
 async def run(args):
     status = Status(args.status_path)
     focus = MacFocus(args.profile, args.log_path.with_name("relay-focus.log"))
-    relay = Relay(args.profile, focus, args.port, status)
+    relay = Relay(args.profile, focus, args.port, status, hold=args.hold)
     stopping = asyncio.Event()
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
@@ -171,6 +171,8 @@ def main():
     p.add_argument("--status-path", type=Path, default=DATA_DIR / "relay-status.json")
     p.add_argument("--log-path", type=Path, default=DATA_DIR / "relay.log")
     p.add_argument("--exit-with-parent", action="store_true")
+    p.add_argument("--hold", action="store_true",
+                   help="keep one approved Chrome connection open and lend it to one client at a time")
     a = p.parse_args()
     if not 1024 <= a.port <= 65535:
         p.error("port must be between 1024 and 65535")
