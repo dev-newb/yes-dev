@@ -494,20 +494,6 @@ class Engine:
             "AUDIT",
         )
 
-    def _raise_host(self, host) -> None:
-        """Best-effort AXRaise on the sheet and its parent window so the click lands."""
-        try:
-            AXUIElementPerformAction(host, "AXRaise")
-        except Exception:
-            pass
-        parent = _attr(host, "AXParent")
-        if parent is None:
-            return
-        try:
-            AXUIElementPerformAction(parent, "AXRaise")
-        except Exception:
-            pass
-
     def _sheet_still_up(self, host, button) -> bool:
         """True while the sheet that was pressed - that AX node, not whatever
         now sits at its coordinates - is still on screen with its Allow button.
@@ -682,19 +668,27 @@ class Engine:
         after that has nowhere safe to land. A second AXPress is never sent:
         it removes the sheet and leaves the socket unapproved, which reads as
         success and is not. A sheet that survives both is retried next sweep.
+
+        Nothing raises the sheet's window first. AXRaise was a leftover from when
+        the fallback was a pointer click, which needed the window on top; AXPress
+        and the keystroke both target the element directly. Raising only reordered
+        the user's Chrome windows, putting the one with the sheet above whichever
+        window they were working in.
         """
         seen_at = time.monotonic()
-        self._raise_host(host)
         ax_ok = self._press(button) is not None
+        # A sheet that goes without a successful press was dismissed by something
+        # else - teardown, or the user. Say so rather than credit a press.
+        pressed = "AXPress" if ax_ok else "AlreadyDismissed"
         time.sleep(VERIFY_WAIT_S)
         self._log_press_state(host, button, "after first AXPress")
         if not self._sheet_still_up(host, button):
-            return "AXPress" if ax_ok else "AXRaise"
+            return pressed
 
         guard_left = ACTIVATION_GUARD_S - (time.monotonic() - seen_at)
         if guard_left > 0:
             time.sleep(guard_left)
-        return self._key_approve(pid, host, button, "AXPress" if ax_ok else "AXRaise")
+        return self._key_approve(pid, host, button, pressed)
 
     def _element_summary(self, element) -> str:
         """Return the AX identity and geometry used to audit a pending click."""
