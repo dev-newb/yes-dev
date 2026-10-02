@@ -21,7 +21,8 @@ A restore fires only when all of these hold:
     Chrome or Cmd-Tabbed to it produced input, Chrome activating itself did not;
   - the browser is showing the consent sheet, checked a few times over a short
     window because the activation is delivered a beat before the sheet reaches
-    the accessibility tree.
+    the accessibility tree;
+  - no new mouse or keyboard input arrived while that sheet check was pending.
 
 One attempt per activation, and every step is timestamped to the millisecond so
 the blink can be measured against WindowServer's own record rather than guessed.
@@ -171,14 +172,27 @@ class Guard:
                 return self._skip(f"{who} activated with no consent sheet after "
                                   f"{checks} checks - leaving it")
 
+        # Chrome's AX reads can block through the sheet animation. The quiet
+        # value above is then stale: a click during that wait belongs to the
+        # user even if the browser was already frontmost and sends no new
+        # activation notification. Compare with the whole pending interval,
+        # not QUIET_S, so a long AX stall cannot age that click out again.
+        quiet_before_restore = CGEventSourceSecondsSinceLastEventType(
+            kCGEventSourceStateCombinedSessionState, kCGAnyInputEventType)
         t_restore = time.monotonic()
+        if quiet_before_restore <= t_restore - t_notified:
+            return self._skip(
+                f"{who} received user input while consent check was pending "
+                f"({quiet_before_restore * 1000:.0f}ms ago) - leaving focus alone")
+
         how = self._restore(prev)
         self.restores += 1
         self.log(
             f"RESTORE {prev['name']} pid={prev['pid']} taken_by={who} "
             f"notified_at=+{(t_notified - info['at']) * 1000:.0f}ms "
             f"decided_in={(t_restore - t_notified) * 1000:.0f}ms "
-            f"quiet={quiet:.2f}s sheet_checks={checks} via={how}",
+            f"quiet_at_activation={quiet:.2f}s quiet_before_restore={quiet_before_restore:.2f}s "
+            f"sheet_checks={checks} via={how}",
             "ACTION",
         )
         # Read the result back once the window server has had a moment.
