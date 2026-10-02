@@ -3,6 +3,91 @@
 Newest first. Each entry says what changed and, where it matters, what was
 measured - the numbers are from this repo's own runs, not estimates.
 
+## 1.3.0 - 2026-10-02
+
+macOS: a native Settings window, fast focus through a local relay, and an engine
+that no longer grows. Contains everything in 1.2.2 and 1.2.1. Windows users have
+nothing new to install.
+
+### macOS: settings window and optional fast-focus relay
+
+**Settings…** opens a native window for approval, timing, notices, burst behavior,
+login, diagnostics, and focus. Save validates values before applying them;
+Cancel leaves saved settings alone. Writes use atomic replacement and preserve
+unknown settings. The menu no longer asks macOS users to open a JSON file.
+
+**Fast focus via local relay**, off by default, puts a short ARM/ACK handshake
+immediately before each upstream Chrome connection. The relay preserves one
+Chrome socket per client and serializes only connection establishment. It
+supports browser URL discovery and browser WebSocket connections on loopback;
+disconnects, timeouts, and input cancel pending focus requests. The tray stops
+the relay while approvals are off, paused, or observing, and never runs the
+normal focus guard alongside it.
+
+The early-signal comparison against real Chrome 154 measured median focus
+intervals of 434.5 ms normally and 72.5 ms with the early signal (four trials
+each). All eight CDP connections succeeded, and no second Chrome activation was
+observed after an early restore. This is a smaller interruption; it still
+creates a prompt per connection and does not implement the persistent proxy.
+
+Live relay validation on Chrome 154.0.8037.93 passed raw and Playwright
+reconnects, two independent clients, one client disconnecting, Chrome restart
+recovery, and input cancellation with a real CDP reply and zero focus restores.
+All 47 automated tests and six native helper lifecycle checks passed; the
+settings window also passed Save, Cancel, validation and reload checks.
+
+Long-running watcher scans and puff notifications now drain temporary Cocoa
+objects after each scan/frame. The watcher also avoids copied-string
+accumulation in PyObjC's generic AX attribute output by reading each value
+through an owned array, preserving Accessibility error handling.
+
+The repaired build passed all 54 automated tests, native value/window lifetime
+checks, and a 30-minute workload with 47 scenarios and 64 CDP connections.
+Watcher idle footprint growth fell from 0.912 MiB/min to zero in the measured
+interval; puff growth fell from 16.20 MiB to 0.44 MiB across the run. All test
+processes cleaned up and saved settings were preserved. See `tests/README.md`
+for the bounded scope, measurements and forced-restart counter caveat.
+
+The normal guard now checks for input again after reading the consent sheet,
+immediately before restoring focus. A deliberate click during a blocked sheet
+lookup cancels that pending restore, including when the lookup lasts longer than
+the quiet-input threshold. Regression, transport and settings tests plus native
+UI/lifecycle checks are described in `tests/README.md`.
+
+### macOS: quiet focus, an option that hands focus back when Chrome takes it
+
+Chrome activates its own window the moment a client connects, before it has
+built the consent sheet, and macOS lets it: the app asking for activation has
+the last word, window flags do not veto it, and the only things that would are
+a modified Chrome or a SIP-disabled Dock. So the prompt steals focus on every
+connection, something Windows users never saw because Windows refuses
+foreground changes from background processes.
+
+`Settings > Focus & connection > Quiet focus`, off by default, runs a small helper
+beside the engine (`focus_guard_mac.py`, its own process, alive only while the
+engine is approving). It watches app activations and, when Chrome has just come
+forward on its own with a consent sheet up, hands focus straight back to the app
+that had it while the engine approves in the background. "On its own" means no
+mouse or keyboard input in the previous half second; a click or a Cmd-Tab into
+Chrome is left alone. The restore goes through Accessibility, asking the
+previous app to activate itself, which macOS grants the way it granted Chrome.
+
+Measured against a stand-in app that steals focus with the same two calls
+Chrome's widget makes (`tests/mac/focus_flasher.py`), with WindowServer's own
+frontmost log as the judge (`tests/mac/measure_quiet_focus.py`): over 31
+flashes, including six 0.35 s apart, the stand-in was frontmost for a median of
+13 ms and at worst 51 ms, and focus came back to the right app every time. The
+sheet check in an already-settled browser was inexpensive; this stand-in test
+did not measure the blocking lookup while a real consent sheet animates. The
+real-prompt measurement above supersedes it for expected interruption length.
+
+A blink, not prevention: keystrokes inside it reach Chrome's sheet, and a
+full-screen app still changes desktops unless Mission Control's "switch to a
+Space with open windows" setting is off. Removing the prompt itself means not
+triggering it; `docs/planning/cdp-proxy.md` is the plan for that.
+
+The config key is `quiet_focus`; the Windows build ignores it.
+
 ## 1.2.2 - 2026-09-30
 
 ### macOS

@@ -62,6 +62,7 @@ except ImportError:
     from platform_mac import DATA_DIR, ensure_data_dir
 
 try:
+    import objc
     from AppKit import (
         NSApplication,
         NSApplicationActivationPolicyProhibited,
@@ -326,54 +327,56 @@ def serve() -> None:
 
     stop = False
     while True:
-        t0 = time.perf_counter()
+        # Drain temporary image and window objects after every frame.
+        with objc.autorelease_pool():
+            t0 = time.perf_counter()
 
-        try:
-            while True:
-                item = pending.get_nowait()
-                if item is None:
-                    stop = True
-                else:
-                    spawn(item, t0)
-        except queue.Empty:
-            pass
+            try:
+                while True:
+                    item = pending.get_nowait()
+                    if item is None:
+                        stop = True
+                    else:
+                        spawn(item, t0)
+            except queue.Empty:
+                pass
 
-        try:
-            due = [d for d in delayed if d <= t0]
-            if due:
-                delayed[:] = [d for d in delayed if d > t0]
-                for _ in due:
-                    if len(live) >= MAX_LIVE:
-                        break
-                    try:
-                        live.append(_Puff())
-                        _debug(f"spawned puff, live={len(live)}")
-                    except Exception:
-                        import traceback
-                        _debug(f"spawn failed: {traceback.format_exc()}")
+            try:
+                due = [d for d in delayed if d <= t0]
+                if due:
+                    delayed[:] = [d for d in delayed if d > t0]
+                    for _ in due:
+                        if len(live) >= MAX_LIVE:
+                            break
+                        try:
+                            live.append(_Puff())
+                            _debug(f"spawned puff, live={len(live)}")
+                        except Exception:
+                            import traceback
+                            _debug(f"spawn failed: {traceback.format_exc()}")
 
-            live[:] = [p for p in live if p.step(t0)]
-        except Exception:
-            # A frame that throws must not kill the loop - that would freeze every
-            # live cloud on screen permanently, in the user's face.
-            import traceback
-            _debug(f"frame failed: {traceback.format_exc()}")
-            for stuck in live:
-                stuck.destroy()
-            live.clear()
+                live[:] = [p for p in live if p.step(t0)]
+            except Exception:
+                # A frame that throws must not kill the loop - that would freeze every
+                # live cloud on screen permanently, in the user's face.
+                import traceback
+                _debug(f"frame failed: {traceback.format_exc()}")
+                for stuck in live:
+                    stuck.destroy()
+                live.clear()
 
-        if stop and not live and not delayed:
-            break
+            if stop and not live and not delayed:
+                break
 
-        # Animate at full rate only while there is something to animate; otherwise
-        # idle cheaply until the next approval arrives.
-        busy = bool(live) or bool(delayed)
-        work = time.perf_counter() - t0
-        interval = max(0.001, FRAME_MS / 1000.0 - work) if busy else IDLE_MS / 1000.0
-        # Returns early if an input source fires, which costs one cheap extra
-        # frame and nothing else: the motion is time-based, not frame-counted.
-        NSRunLoop.currentRunLoop().runMode_beforeDate_(
-            NSDefaultRunLoopMode, NSDate.dateWithTimeIntervalSinceNow_(interval))
+            # Animate at full rate only while there is something to animate; otherwise
+            # idle cheaply until the next approval arrives.
+            busy = bool(live) or bool(delayed)
+            work = time.perf_counter() - t0
+            interval = max(0.001, FRAME_MS / 1000.0 - work) if busy else IDLE_MS / 1000.0
+            # Returns early if an input source fires, which costs one cheap extra
+            # frame and nothing else: the motion is time-based, not frame-counted.
+            NSRunLoop.currentRunLoop().runMode_beforeDate_(
+                NSDefaultRunLoopMode, NSDate.dateWithTimeIntervalSinceNow_(interval))
 
     for puff in live:
         puff.destroy()

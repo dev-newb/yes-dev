@@ -11,3 +11,5 @@ pyobjc-framework-Cocoa>=9.0; sys_platform == "darwin"
 pyobjc-framework-ApplicationServices>=9.0; sys_platform == "darwin"
 # Keyboard-only: CGEventPostToPid delivers keystrokes without moving the pointer.
 pyobjc-framework-Quartz>=9.0; sys_platform == "darwin"
+# Local CDP relay. 15.x retains Python 3.9 support and the tested asyncio API.
+websockets>=15.0.1,<16; sys_platform == "darwin"

@@ -66,9 +66,11 @@ except ImportError:  # allow running from another cwd
     from platform_mac import DATA_DIR, LOG_PATH, ensure_data_dir, is_trusted
 
 try:
+    import objc
     from ApplicationServices import (
         AXUIElementCreateApplication,
-        AXUIElementCopyAttributeValue,
+        AXUIElementCopyMultipleAttributeValues,
+        kAXCopyMultipleAttributeOptionStopOnError,
         AXUIElementPerformAction,
         AXUIElementSetAttributeValue,
         AXValueGetValue,
@@ -147,11 +149,23 @@ MAX_TAB_STOPS = 6
 
 
 
+def _copy_attribute(element, name):
+    """Read one attribute through an owned array, preserving AX error codes.
+
+    PyObjC 12.2.2 leaks copied strings returned directly through CFTypeRef out
+    parameters. The array path lets the bridge balance ownership for every
+    value type, without manual CFRelease calls or version-specific patches.
+    """
+    err, values = AXUIElementCopyMultipleAttributeValues(
+        element, [name], kAXCopyMultipleAttributeOptionStopOnError, None)
+    return err, values[0] if err == kAXErrorSuccess and values else None
+
+
 def _attr(element, name):
     """One AX attribute, or None. Every read can fail (permission, torn-down
     element); callers treat None as 'not present' rather than crashing."""
     try:
-        err, value = AXUIElementCopyAttributeValue(element, name, None)
+        err, value = _copy_attribute(element, name)
     except Exception:
         return None
     return value if err == kAXErrorSuccess else None
@@ -166,7 +180,7 @@ def _ref_alive(element) -> bool | None:
     Chrome tears the dialog down, and which a live node never returns. None:
     no answer either way (Chrome busy, AX unreachable) - proof of nothing."""
     try:
-        err, _ = AXUIElementCopyAttributeValue(element, "AXRole", None)
+        err, _ = _copy_attribute(element, "AXRole")
     except Exception:
         return None
     if err == kAXErrorSuccess:
@@ -830,7 +844,9 @@ class Engine:
                          "unsupervised", "WARN")
                 return 0
             try:
-                self.sweep()
+                # The polling loop does not enter AppKit's event loop.
+                with objc.autorelease_pool():
+                    self.sweep()
             except Exception as exc:
                 self.log(f"loop error: {exc!r}", "ERROR")
             time.sleep(self.poll_s)
