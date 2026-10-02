@@ -57,6 +57,7 @@ class MacFocus:
             sys.executable, str(ROOT / "early_focus_guard_mac.py"),
             "--browser-pid", str(pid), "--profile", str(self.profile),
             "--runtime-dir", str(run), "--log-path", str(self.log_path), "--exit-with-parent",
+            "--parent-pid", str(os.getpid()),
             stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
         try:
             deadline = time.monotonic() + 4
@@ -144,7 +145,8 @@ async def run(args):
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
         loop.add_signal_handler(sig, stopping.set)
-    parent = os.getppid()
+    # The supervisor's pid when it passed one; see watcher_mac.Engine.
+    parent = args.parent_pid or os.getppid()
     try:
         await relay.start()
         LOGGER.info("Listening at %s", relay.address)
@@ -171,6 +173,10 @@ def main():
     p.add_argument("--status-path", type=Path, default=DATA_DIR / "relay-status.json")
     p.add_argument("--log-path", type=Path, default=DATA_DIR / "relay.log")
     p.add_argument("--exit-with-parent", action="store_true")
+    p.add_argument("--parent-pid", type=int, default=0,
+                   help="the supervisor's pid, passed by the supervisor itself. Without it the "
+                         "parent is read at startup, which is too late if the parent has "
+                         "already exited: the helper then records launchd and never stops")
     p.add_argument("--hold", action="store_true",
                    help="keep one approved Chrome connection open and lend it to one client at a time")
     a = p.parse_args()

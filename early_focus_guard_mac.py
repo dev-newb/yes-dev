@@ -334,6 +334,8 @@ def main():
     parser.add_argument("--log-path", required=True)
     parser.add_argument("--ttl", type=float, default=2.0)
     parser.add_argument("--exit-with-parent", action="store_true")
+    parser.add_argument("--parent-pid", type=int, default=0,
+                        help="the relay's pid, passed by the relay; see watcher_mac.py")
     opts = parser.parse_args()
     opts.watch_pid, opts.include_edge = [opts.browser_pid], False
     app = NSRunningApplication.runningApplicationWithProcessIdentifier_(opts.browser_pid)
