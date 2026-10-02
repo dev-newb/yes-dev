@@ -207,8 +207,53 @@ WebSocket handshake, so the connection waits until approval.
 | **Pause on burst** | Trip past 30 / 60 / 120 approvals a minute, or off. Then either **ask me first** (5s dialog: Stop, or Allow for one hour) or **stop silently** and re-arm after a minute. |
 | **Observe only** | Log the dialogs but don't click - useful for a first look. |
 | **Include Microsoft Edge** | Watch Edge windows too. |
-| **Quiet focus (experimental)** *(macOS)* | Hand focus back to the app you were in when Chrome takes it for a prompt: a blink of about 15 ms instead of a stolen window. Off by default; see [macOS specifically](#macos-specifically). |
-| **Open log / Open config** | The data directory for your platform (see [Files](#files)). |
+| **Settings…** *(macOS)* | A native window for approval, notifications, timing, login, diagnostic logging, and focus settings. Save applies validated changes; Cancel discards edits. |
+| **Focus behavior** *(macOS Settings → Focus & connection)* | Off, Quiet focus, or Fast focus through the local relay. Off by default; see below. |
+| **Open log / Open relay log** *(macOS)* | Approval and connection diagnostics. |
+| **Open log / Open config** *(Windows)* | The data directory for your platform (see [Files](#files)). |
+
+On macOS, the configuration controls in this table live in **Settings…**;
+the menu keeps the master switch, status, Accessibility, logs, and Quit. No JSON
+editing is needed. Settings are still stored internally in `config.json`.
+
+### Fast focus through the local relay (macOS, experimental)
+
+In **Settings… → Focus & connection**, choose **Fast focus via local relay**,
+select Chrome's data folder, and Save. The data folder contains `Local State`
+and `DevToolsActivePort` (normally `~/Library/Application Support/Google/Chrome`),
+rather than its `Default` or `Profile 1` subfolder. Enable Remote Debugging in
+Chrome at `chrome://inspect/#remote-debugging`.
+
+Use the saved connection address shown in Settings, normally
+`http://127.0.0.1:9333`, for the client's browser URL. For example, Playwright's
+Python API connects with:
+
+```python
+browser = await playwright.chromium.connect_over_cdp("http://127.0.0.1:9333")
+```
+
+Clients that accept a browser websocket can use
+`ws://127.0.0.1:9333/devtools/browser/yesdev`. HTTP discovery at `/json/version`
+returns this address without opening a connection to Chrome. The relay binds
+only to loopback and rejects website Origin headers and unrelated Host headers.
+
+Each client gets its own upstream Chrome socket, so normal CDP messages and
+session IDs remain independent. Only handshakes are queued: the focus guard
+acknowledges a short-lived request immediately before the relay opens Chrome's
+socket. Existing clients then continue concurrently. Disconnects close their
+upstream socket; a later connection rereads Chrome's endpoint after a restart.
+
+Fast focus applies to connections through this relay. Direct Chrome connections
+still work, but do not get a focus restore while Fast focus is selected. The
+normal guard and fast guard are mutually exclusive to avoid competing restores.
+Turning approvals off, choosing Observe only, or pausing the app stops the relay
+and disconnects its clients. The relay resumes with approval; clients reconnect.
+
+This is an experimental shortcut based on request timing, not proof that a
+particular activation belongs to a consent sheet. Input after arming cancels the
+restore; recent input permits the connection without returning focus. It still
+creates one consent prompt per client connection. The persistent, multiplexed
+proxy in `docs/planning/cdp-proxy.md` is separate work.
 
 The icon is green when armed, amber when observing, grey when off, red when
 paused, and carries a running approval count - in the tooltip on Windows, in the
@@ -237,10 +282,11 @@ never touches the accessibility APIs itself: it supervises the engine process,
 tails its log, and writes `config.json`. Options the engine only reads at
 startup restart it automatically.
 
-The **config file is identical on both platforms** - same name, same keys, same
-defaults - so settings copy across machines. Both builds read it as `utf-8-sig`
-and write plain UTF-8, because Notepad and PowerShell add a byte-order mark that
-a strict UTF-8 read would reject, silently resetting every setting to default.
+The common approval settings use the same keys and defaults on both platforms.
+macOS adds focus and relay settings. Both builds read `utf-8-sig` and write plain
+UTF-8 so files copied from Windows can include a byte-order mark. The macOS
+settings window validates changes and replaces the saved file atomically;
+unrecognized settings are preserved.
 
 ### Finding the dialog on Windows
 
@@ -441,12 +487,15 @@ in the data directory.
 |---|---|
 | `yes_dev.pyw` | Windows tray UI, engine supervisor, config |
 | `yes_dev_mac.py` | macOS menu-bar UI, engine supervisor, config |
+| `settings_mac.py`, `settings_model.py` | Native macOS settings window, validation, atomic persistence |
 | `watcher.ps1` | The UI Automation engine. Runs standalone too. |
 | `watcher_mac.py` | The Accessibility engine. Runs standalone too. |
 | `platform_mac.py` | macOS paths, single instance, permission check, autostart |
 | `puffs.py` | The cloud overlay and the shared artwork. Its own process. |
 | `puffs_mac.py` | The macOS cloud overlay. Its own process. |
 | `focus_guard_mac.py` | The macOS focus guard behind Quiet focus. Its own process. |
+| `relay_mac.py`, `cdp_relay.py` | Optional macOS CDP relay and independent client transports |
+| `early_focus_guard_mac.py`, `focus_protocol.py` | Early-focus helper and single-use request policy |
 | `burst_dialog.py` | The five-second burst prompt. Also its own process. Shared. |
 | `docs/mac/ax_probe.py` | Dumps Chrome's accessibility tree around the dialog |
 | `tests/mac/` | Measures the focus guard against a stand-in that steals focus the way Chrome does |
@@ -460,6 +509,7 @@ Everything the app writes lives in one directory per platform:
 | Settings | `config.json` | `config.json` |
 | Approvals, from the engine | `yes-dev.log` | `yes-dev.log` |
 | Tray-side events and errors | `tray.log` | `tray.log` |
+| Relay connections / focus | — | `relay.log` / `relay-focus.log` |
 
 Both logs roll over at 1MB, keeping one previous generation.
 
@@ -511,15 +561,18 @@ python3 watcher_mac.py --observe
 - **Chrome brings itself forward when it prompts.** The engine never activates
   Chrome, but Chrome's own dialog code activates the browser window before it
   builds the sheet, so the frontmost app becomes Chrome the moment a client
-  connects. Nothing outside Chrome can veto that. **Quiet focus** (under
-  Options, experimental, off by default) is the nearest thing: a helper that
+  connects. Nothing outside Chrome can veto that. **Quiet focus** (in
+  Settings → Focus & connection, off by default) is a helper that
   watches app activations and hands focus straight back when Chrome has just
   come forward on its own with a consent sheet up, while the engine approves in
   the background. "On its own" means no mouse or keyboard input in the previous
-  half second; your own click or Cmd-Tab into Chrome is left alone. Measured
-  against a stand-in that steals focus with the same calls Chrome makes, the
-  stand-in was frontmost for a median of 13 ms and at worst 51 ms, with focus
-  back where it was every time (`tests/mac/measure_quiet_focus.py`). It is a
+  half second; new input while the consent-sheet check is pending cancels the
+  restore too, so a click or Cmd-Tab during that wait is left alone. In four real
+  Chrome 154 comparisons, the normal guard's median interruption was 434.5 ms.
+  The early-signal prototype reduced it to 72.5 ms, with no later Chrome
+  activation observed. The earlier 13 ms median was a stand-in measurement that
+  did not include Chrome's blocking sheet lookup; it does not describe real
+  consent prompts. See `tests/README.md` for the evidence and limits. It is a
   blink, not prevention: a keystroke inside it reaches Chrome's sheet, where
   Space presses Cancel and a Cmd shortcut acts on Chrome, and if your app is
   full-screen the activation still switches desktops unless Mission Control's

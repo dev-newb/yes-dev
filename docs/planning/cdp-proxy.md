@@ -1,6 +1,9 @@
 # Plan: a local CDP proxy, so Chrome never prompts after the first connection
 
-> Planning document. Nothing here is built. It exists because the only way to
+> Planning document for a persistent, multiplexed proxy. The separate thin relay
+> (`cdp_relay.py`, `relay_mac.py`) opens one upstream per client and implements
+> an early-focus handshake; it does not implement the shared socket described
+> here. This plan exists because the only way to
 > stop Chrome taking focus for a remote-debugging consent prompt, without
 > modifying Chrome, is to stop the prompt from happening, and this is how.
 
@@ -11,8 +14,12 @@ browser websocket gets its own prompt, and every prompt activates Chrome's
 window before the sheet is built (`DevToolsConnectionDialog` calls
 `browser->GetWindow()->Activate()`). macOS honours that activation; nothing
 outside Chrome can veto it. The quiet-focus helper shrinks the interruption to a
-blink of roughly 15 ms, measured, but it is still an interruption, and keystrokes
+blink, but it is still an interruption, and keystrokes
 inside that window reach Chrome.
+
+The real Chrome 154 comparison on 2026-10-01 measured 434.5 ms median for the
+normal guard and 72.5 ms for the early-signal prototype. The previous roughly
+15 ms number came from a stand-in without Chrome's consent-sheet animation.
 
 A proxy removes the prompt instead. Chrome prompts once, for the proxy's own
 connection, at launch. Every agent then connects to the proxy, which carries
