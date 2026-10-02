@@ -3,7 +3,11 @@
 Newest first. Each entry says what changed and, where it matters, what was
 measured - the numbers are from this repo's own runs, not estimates.
 
-## Unreleased
+## 1.3.0 - 2026-10-02
+
+macOS: a native Settings window, fast focus through a local relay, and an engine
+that no longer grows. Contains everything in 1.2.2 and 1.2.1. Windows users have
+nothing new to install.
 
 ### macOS: settings window and optional fast-focus relay
 
