@@ -24,9 +24,17 @@ sys.path.insert(0, str(ROOT))
 from focus_protocol import AppIdentity, ArmGate
 import focus_guard_mac as normal
 from AppKit import NSRunningApplication, NSWorkspace
-from Foundation import NSDate, NSObject, NSRunLoop, NSTimer
+from CoreFoundation import (
+    CFFileDescriptorCreate, CFFileDescriptorCreateRunLoopSource, CFFileDescriptorEnableCallBacks,
+    CFFileDescriptorInvalidate, CFRunLoopAddSource, CFRunLoopGetCurrent, kCFFileDescriptorReadCallBack,
+    kCFRunLoopDefaultMode,
+)
+from Foundation import NSDate, NSDefaultRunLoopMode, NSObject, NSRunLoop, NSTimer
 
 MAX_MESSAGE = 4096
+HOLD_LIMIT_S = 6        # an unauthenticated client may not hold the only slot longer
+PENDING_TICK_S = 0.005  # expiry and input checks, only while a request is armed
+IDLE_SLICE_S = 1.0      # the loop also wakes for sockets, signals and notifications
 
 
 def identity(app):
@@ -44,13 +52,49 @@ def idle_age():
         normal.kCGEventSourceStateCombinedSessionState, normal.kCGAnyInputEventType)
 
 
-class ControlServer:
-    """Small bounded protocol, polled on the AppKit thread before ACK is sent."""
+class FdWatch:
+    """Run callback on the run loop each time fd becomes readable.
 
-    def __init__(self, path, token, handler, disconnected):
+    The caller keeps ownership of fd; closing the watch never closes it, and it
+    must be closed before fd is, so a reused descriptor number is never watched
+    on behalf of a socket that has gone.
+    """
+
+    def __init__(self, fd, callback):
+        def fired(ref, _types, _info):
+            try:
+                callback()
+            finally:
+                # One callback per enable: re-arm unless the callback closed us.
+                if self.ref is not None:
+                    CFFileDescriptorEnableCallBacks(self.ref, kCFFileDescriptorReadCallBack)
+        self._fired = fired   # CF holds no Python reference to the callable
+        self.ref = CFFileDescriptorCreate(None, fd, False, fired, None)
+        CFRunLoopAddSource(CFRunLoopGetCurrent(),
+                           CFFileDescriptorCreateRunLoopSource(None, self.ref, 0),
+                           kCFRunLoopDefaultMode)
+        CFFileDescriptorEnableCallBacks(self.ref, kCFFileDescriptorReadCallBack)
+
+    def close(self):
+        ref, self.ref = self.ref, None
+        if ref is not None:
+            CFFileDescriptorInvalidate(ref)   # also removes its run-loop source
+
+
+class ControlServer:
+    """Small bounded protocol, serviced on the AppKit thread before ACK is sent.
+
+    poll() does one step of work and is what the tests drive. In the helper,
+    ready() is called when the listener or the client socket is readable, and
+    on the hold-limit timer, so nothing runs while nothing happens.
+    """
+
+    def __init__(self, path, token, handler, disconnected, watch=None):
         self.token = token
         self.handler = handler
         self.disconnected = disconnected
+        # Optional run-loop hooks: client_opened(sock) and client_closing(sock).
+        self.watch = watch
         self.listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         self.listener.bind(str(path))
         os.chmod(path, 0o600)
@@ -62,6 +106,8 @@ class ControlServer:
 
     def drop(self):
         if self.client is not None:
+            if self.watch is not None:
+                self.watch.client_closing(self.client)
             self.client.close()
             self.client = None
             self.buffer = b""
@@ -69,7 +115,7 @@ class ControlServer:
 
     def poll(self):
         # Unauthenticated clients cannot hold the sole connection indefinitely.
-        if self.client is not None and time.monotonic() - self.accepted_at > 6:
+        if self.client is not None and time.monotonic() - self.accepted_at > HOLD_LIMIT_S:
             self.drop()
         try:
             client, _ = self.listener.accept()
@@ -82,6 +128,8 @@ class ControlServer:
                 self.client = client
                 client.setblocking(False)
                 self.accepted_at = time.monotonic()
+                if self.watch is not None:
+                    self.watch.client_opened(client)
         if self.client is None:
             return
         if b"\n" not in self.buffer:
@@ -119,6 +167,12 @@ class ControlServer:
         except (ValueError, TypeError, OSError):
             self.drop()
 
+    def ready(self):
+        """Service everything that is waiting: an accept, a read, every whole line."""
+        self.poll()
+        while self.client is not None and b"\n" in self.buffer:
+            self.poll()
+
     def close(self):
         self.drop()
         self.listener.close()
@@ -133,6 +187,54 @@ class EarlyGuard(normal.Guard):
         self.bridge = _EarlyFocusBridge.alloc().init()
         self.bridge.guard = self
         self.control = None
+        self.listen_watch = None
+        self.client_watch = None
+        self.hold_timer = None
+        self.pending_timer = None
+
+    # -------- run-loop wiring: the helper sleeps until something happens --------
+
+    def attach(self, control):
+        self.control = control
+        self.listen_watch = FdWatch(control.listener.fileno(), self.control_ready)
+
+    def control_ready(self):
+        self.control.ready()
+        self.sync_pending_timer()
+
+    def client_opened(self, sock):
+        self.client_watch = FdWatch(sock.fileno(), self.control_ready)
+        self.hold_timer = NSTimer.scheduledTimerWithTimeInterval_target_selector_userInfo_repeats_(
+            HOLD_LIMIT_S + 0.05, self.bridge, "holdLimit:", None, False)
+
+    def client_closing(self, _sock):
+        if self.client_watch is not None:
+            self.client_watch.close()
+            self.client_watch = None
+        if self.hold_timer is not None:
+            self.hold_timer.invalidate()
+            self.hold_timer = None
+
+    def sync_pending_timer(self):
+        """Tick fast only while a request is armed: at most two seconds per connection."""
+        if self.gate.pending is not None and self.pending_timer is None:
+            self.pending_timer = NSTimer.scheduledTimerWithTimeInterval_target_selector_userInfo_repeats_(
+                PENDING_TICK_S, self.bridge, "pendingTick:", None, True)
+        elif self.gate.pending is None and self.pending_timer is not None:
+            self.pending_timer.invalidate()
+            self.pending_timer = None
+
+    def detach(self):
+        for timer in (self.hold_timer, self.pending_timer):
+            if timer is not None:
+                timer.invalidate()
+        self.hold_timer = self.pending_timer = None
+        if self.client_watch is not None:
+            self.client_watch.close()
+            self.client_watch = None
+        if self.listen_watch is not None:
+            self.listen_watch.close()
+            self.listen_watch = None
 
     def command(self, message):
         op, request_id = message.get("op"), message["request_id"]
@@ -177,6 +279,7 @@ class EarlyGuard(normal.Guard):
         decision = self.gate.activation(activated, previous, time.monotonic(), idle)
         self.log(f"ACTIVATED name={app.localizedName()} pid={activated.pid} "
                  f"request={request_id} decision={decision}", "AUDIT")
+        self.sync_pending_timer()
         if decision != "restore":
             return
         # Revalidate the destination and input immediately before the AX call.
@@ -196,13 +299,13 @@ class EarlyGuard(normal.Guard):
             NSTimer.scheduledTimerWithTimeInterval_target_selector_userInfo_repeats_(
                 delay, self.bridge, "verify:", {"want": pending.previous.pid, "since": restore_at}, False)
 
-    def poll(self):
-        self.control.poll()
+    def pending_tick(self):
         now = time.monotonic()
         if self.gate.expire(now):
             self.log("request expired", "AUDIT")
         elif self.gate.input_changed(now, idle_age()):
             self.log("request cancelled by input after ARM", "AUDIT")
+        self.sync_pending_timer()
 
 
 class _EarlyFocusBridge(NSObject):
@@ -211,8 +314,12 @@ class _EarlyFocusBridge(NSObject):
     def activated_(self, note):
         self.guard.on_activated(note)
 
-    def poll_(self, _timer):
-        self.guard.poll()
+    def pendingTick_(self, _timer):
+        self.guard.pending_tick()
+
+    def holdLimit_(self, _timer):
+        self.guard.hold_timer = None
+        self.guard.control_ready()
 
     def verify_(self, timer):
         value = timer.userInfo()
@@ -227,6 +334,8 @@ def main():
     parser.add_argument("--log-path", required=True)
     parser.add_argument("--ttl", type=float, default=2.0)
     parser.add_argument("--exit-with-parent", action="store_true")
+    parser.add_argument("--parent-pid", type=int, default=0,
+                        help="the relay's pid, passed by the relay; see watcher_mac.py")
     opts = parser.parse_args()
     opts.watch_pid, opts.include_edge = [opts.browser_pid], False
     app = NSRunningApplication.runningApplicationWithProcessIdentifier_(opts.browser_pid)
@@ -243,7 +352,7 @@ def main():
     token = secrets.token_hex(32)
     normal.NSApplication.sharedApplication().setActivationPolicy_(normal.NSApplicationActivationPolicyAccessory)
     guard = EarlyGuard(opts, browser)
-    guard.control = ControlServer(socket_path, token, guard.command, guard.disconnected)
+    guard.attach(ControlServer(socket_path, token, guard.command, guard.disconnected, watch=guard))
     session_path = opts.runtime_dir / "session.json"
     staged_session = session_path.with_suffix(".tmp")
     with open(staged_session, "x", opener=lambda path, flags: os.open(path, flags, 0o600)) as f:
@@ -253,8 +362,6 @@ def main():
     staged_session.replace(session_path)
     NSWorkspace.sharedWorkspace().notificationCenter().addObserver_selector_name_object_(
         guard.bridge, "activated:", normal.NSWorkspaceDidActivateApplicationNotification, None)
-    poll_timer = NSTimer.scheduledTimerWithTimeInterval_target_selector_userInfo_repeats_(
-        0.005, guard.bridge, "poll:", None, True)
     guard.log(f"early-focus experiment ready browser_pid={browser.pid} session={session_path}")
     stopping = False
     def stop(*_):
@@ -262,15 +369,34 @@ def main():
         stopping = True
     for sig in (signal.SIGINT, signal.SIGTERM):
         signal.signal(sig, stop)
+    # A signal writes its number to this pipe, which wakes the run loop at once;
+    # the Python handler above then runs as soon as the wake-up callback does.
+    # Without it the loop would have to wake on a timer just to notice a signal.
+    wake_r, wake_w = os.pipe()
+    for fd in (wake_r, wake_w):
+        os.set_blocking(fd, False)
+    signal.set_wakeup_fd(wake_w)
+    def drain_wake():
+        try:
+            os.read(wake_r, 512)
+        except BlockingIOError:
+            pass
+    wake_watch = FdWatch(wake_r, drain_wake)
     try:
-        # Return to Python regularly so SIGTERM can end an idle accessory app.
-        # NSApplication.stop_ alone can wait indefinitely for an AppKit event.
+        # runMode:beforeDate: returns after any input source - a socket, the
+        # signal pipe, an activation notification - or after IDLE_SLICE_S, so an
+        # idle helper wakes once a second instead of two hundred times.
         while not stopping:
-            NSRunLoop.currentRunLoop().runUntilDate_(NSDate.dateWithTimeIntervalSinceNow_(0.05))
+            NSRunLoop.currentRunLoop().runMode_beforeDate_(
+                NSDefaultRunLoopMode, NSDate.dateWithTimeIntervalSinceNow_(IDLE_SLICE_S))
             if opts.exit_with_parent and os.getppid() != guard.parent_pid:
                 stopping = True
     finally:
-        poll_timer.invalidate()
+        signal.set_wakeup_fd(-1)
+        wake_watch.close()
+        os.close(wake_r)
+        os.close(wake_w)
+        guard.detach()
         NSWorkspace.sharedWorkspace().notificationCenter().removeObserver_(guard.bridge)
         guard.control.close()
         session_path.unlink(missing_ok=True)

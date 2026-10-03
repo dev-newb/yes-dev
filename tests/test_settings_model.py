@@ -57,6 +57,13 @@ class SettingsTests(unittest.TestCase):
             self.assertEqual(json.loads(path.read_text()), values)
             self.assertEqual(path.stat().st_mode & 0o777, 0o600)
 
+    def test_hold_is_off_by_default_and_must_be_a_real_boolean(self):
+        self.assertIs(DEFAULTS["relay_hold"], False)
+        self.assertFalse(normalize({"relay_hold": "true"})["relay_hold"])
+        self.assertTrue(normalize({"relay_hold": True})["relay_hold"])
+        with self.assertRaises(ValueError):
+            validate({**DEFAULTS, "relay_hold": "yes"})
+
 
 if __name__ == "__main__":
     unittest.main()

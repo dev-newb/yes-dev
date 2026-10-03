@@ -3,6 +3,103 @@
 Newest first. Each entry says what changed and, where it matters, what was
 measured - the numbers are from this repo's own runs, not estimates.
 
+## 1.4.0 - 2026-10-03
+
+macOS: optionally keep one Chrome connection open, so Chrome asks once per
+launch instead of once per client; helpers that can no longer outlive the tray;
+a fast-focus helper that costs nothing while idle; and Chrome windows that stay
+where you put them during an approval. Windows users have nothing new to
+install.
+
+### macOS: hold one Chrome connection, so Chrome asks once per launch
+
+A new option under **Settings… → Focus & connection**, off by default:
+**Keep one Chrome connection open**. With fast focus on, the relay keeps the
+first approved Chrome connection open and lends it to one client at a time.
+Later clients reuse it, so Chrome prompts once per launch instead of once per
+client. A client that connects while another holds the connection gets its own
+connection and its own prompt, as before. Fewer prompts is not the same as no
+interruptions: a tool that opens a page in the foreground still brings Chrome
+forward. In the live run, Playwright's new page did, for about a second, with
+no prompt involved.
+
+Taking turns on one connection needs care, because Chrome cannot tell the
+clients apart. Every message id is renumbered on the way in and restored on
+the way out, so a reply still in flight when a client leaves is dropped
+rather than delivered to the next one, and so are events from that client's
+sessions. When a client leaves, the relay switches off the browser-level
+settings it changed (target discovery, auto-attach, download behavior,
+request interception, certificate errors, permissions), then detaches its
+sessions, before lending the connection again. Browser contexts are disposed
+exactly when Chrome would dispose them on a disconnect, which is when they were
+created with `disposeOnDetach: true`; measured on Chrome 154, contexts created
+without it survive a direct disconnect, so they survive here too. Tabs it
+opened stay open, as after a direct disconnect. If Chrome refuses a reset or
+does not answer, the relay closes the held connection instead of lending it,
+and the next client costs one prompt. While hold is on, `Browser.close` from
+any client, held or not, ends that client only, never your Chrome.
+
+Chrome shows its "controlled by automated test software" banner for as long
+as the connection is held, observed live. That is the trade for the missing
+prompts.
+
+Run against real Chrome 154.0.8037.97 with real Playwright and Puppeteer, the
+first version of this had two bugs. Chrome refuses to switch off browser-level
+auto-attach unless `flatten` is set, so Playwright's auto-attach survived it
+and the next client's new page hung waiting for a debugger. And a concurrent
+client's own connection forwarded `Browser.close`, which closed Chrome under
+the held client. Both are fixed. The fake Chrome the tests use now refuses
+what real Chrome refused; the first version of the relay fails six of the new
+tests, and every fix, undone on its own, is caught by the matching test.
+Sequential reuse with one prompt, context disposal, Puppeteer, concurrent
+fallback, Chrome restart, ten idle minutes and the banner all passed live.
+After the fixes, a second live run passed all eight relay cases with no
+refused or abandoned reset: the next client's pages load, a concurrent
+client's `Browser.close` leaves Chrome running, and contexts survive or go
+exactly as over a direct connection. A tab opened by hand after Playwright
+left loaded and ran its script, so nothing was left waiting for a debugger.
+
+### macOS: helpers stop with the tray even if it died while they were starting
+
+Each helper the tray supervises exits when the tray goes, so that an engine
+can never keep approving prompts with nothing watching the rate. Each one
+learned its parent's pid by asking once it had started, though, and if the tray
+died while a helper was still starting, the answer was already launchd and the
+helper ran forever. That happened on this Mac: a faulty test left two engines
+running unsupervised for about half an hour. They approved nothing. The tray
+now passes its own pid, and every helper started by a parent that has already
+gone exits on its first check. Live, the real tray was killed eleven times,
+including five times in the instant after its helpers were created and before
+the engine had finished starting; no helper outlived it by more than a second
+in any trial.
+
+### macOS: the fast-focus helper no longer polls
+
+The early-focus helper checked its control socket on a 5 ms timer and woke
+every 50 ms to notice signals, about 220 times a second for as long as fast
+focus was on. It now sleeps until a socket, a signal or an app activation
+needs it, and ticks quickly only while a connection request is armed, which
+lasts at most two seconds. Idle for 15 seconds on this Mac, the helper went
+from about 2% CPU to none measurable. It answered a control message in under
+a millisecond and exited 25 ms after SIGTERM, removing its runtime files.
+With the real tray idle for a minute it used 0.02 CPU seconds. Against real
+prompts the early restore still landed, with Chrome in front for 39, 45 and
+33 ms against 484, 436 and 431 ms for the normal guard, and input after ARM
+still cancelled it.
+
+### macOS: the sheet's window is no longer raised before Allow is pressed
+
+The engine raised the consent sheet's Chrome window before every press, a
+leftover from when the fallback was a pointer click. Neither the press nor
+the keystroke needs it, and it reordered your Chrome windows: the one with
+the sheet jumped above the one you were using. First proposed in
+[#7](https://github.com/dev-newb/yes-dev/pull/7). A sheet that disappears
+without a successful press is now logged as `AlreadyDismissed` rather than
+credited to a raise. Three queued prompts were approved live with one press
+each and no fallback. With the sheet on a Chrome window behind another, the
+approval took one press, both windows kept their order and position, and
+Chrome never came to the front.
+
 ## 1.3.0 - 2026-10-02
 
 macOS: a native Settings window, fast focus through a local relay, and an engine

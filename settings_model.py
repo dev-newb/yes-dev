@@ -10,7 +10,7 @@ DEFAULTS = {
     "enabled": True, "observe_only": False, "poll_ms": 250,
     "include_edge": False, "notify_style": "puffs", "burst_limit": 60,
     "burst_action": "ask", "arm_minutes": 0, "quiet_focus": False,
-    "diagnostics": False, "relay_enabled": False, "relay_port": 9333,
+    "diagnostics": False, "relay_enabled": False, "relay_port": 9333, "relay_hold": False,
     "relay_profile": str(Path.home() / "Library/Application Support/Google/Chrome"),
 }
 NUMBERS = {

@@ -11,18 +11,18 @@ debugging endpoint. If you drive Chrome with more than one agent or automation
 client, those prompts stack up and each one blocks its client until a human
 clicks Allow. `Yes, Dev` sits in the tray and answers them.
 
-**Latest release: [v1.3.0 - Settings window, fast focus, and a leak-free engine on macOS](https://github.com/dev-newb/yes-dev/releases/tag/v1.3.0).**
-[Download the source ZIP](https://github.com/dev-newb/yes-dev/archive/refs/tags/v1.3.0.zip)
+**Latest release: [v1.4.0 - one Chrome prompt per launch on macOS](https://github.com/dev-newb/yes-dev/releases/tag/v1.4.0).**
+[Download the source ZIP](https://github.com/dev-newb/yes-dev/archive/refs/tags/v1.4.0.zip)
 and follow the [Windows](#windows) or [macOS](#macos) install steps. This is a
 Python source release, not a standalone installer.
 
-On macOS this release adds a native **Settings…** window in place of the menu's
-option lists, **Fast focus** through a local relay, which cuts the interruption
-from a consent prompt from about 430 ms to about 70 ms for clients routed
-through it, and a repair for the engine and the clouds, which were growing by
-almost a megabyte a minute while idle and now hold steady. It contains
-everything in v1.2.2 (macOS on Chrome 153 and 154) and v1.2.1 (the Windows
-approval and counter fixes); Windows users have nothing new to install.
+On macOS this release adds **Keep one Chrome connection open**, an option under
+Fast focus that lends one approved connection to your agents in turn, so Chrome
+asks once per launch instead of once for every client. Helpers can no longer
+outlive the menu-bar app, the fast-focus helper no longer costs anything while
+idle, and approving a prompt no longer reorders your Chrome windows. It builds
+on v1.3.0, which added the native **Settings…** window, Fast focus itself, and
+the engine memory repair; Windows users have nothing new to install.
 
 Measured on Chrome 151: four parallel attaches went from ~35 seconds of waiting
 on a human to **2.4-4.4 seconds**, unattended.
@@ -109,7 +109,7 @@ profile can also use approval mode, as the isolated tests do.
 
 ## Install
 
-Download the [v1.3.0 source ZIP](https://github.com/dev-newb/yes-dev/archive/refs/tags/v1.3.0.zip)
+Download the [v1.4.0 source ZIP](https://github.com/dev-newb/yes-dev/archive/refs/tags/v1.4.0.zip)
 and extract it, or clone the current repository:
 
 ```bash
@@ -250,9 +250,30 @@ and disconnects its clients. The relay resumes with approval; clients reconnect.
 
 This is an experimental shortcut based on request timing, not proof that a
 particular activation belongs to a consent sheet. Input after arming cancels the
-restore; recent input permits the connection without returning focus. It still
-creates one consent prompt per client connection. The persistent, multiplexed
-proxy in `docs/planning/cdp-proxy.md` is separate work.
+restore; recent input permits the connection without returning focus.
+
+On its own, fast focus still creates one consent prompt per client connection.
+Tick **Keep one Chrome connection open** in the same tab to stop that: the
+relay keeps the first approved connection open and lends it to one client at a
+time, so Chrome asks once per launch. That removes the repeated prompts, not
+every reason Chrome comes forward: a tool that opens a page in the foreground
+still brings Chrome to the front, as it would over any connection.
+
+Message ids are renumbered per client, so nothing in flight for a client that
+left reaches the next one. When a client leaves, the relay undoes what it
+changed in the browser: target discovery and auto-attach, download behavior,
+request interception, certificate errors and permissions, then its sessions.
+Browser contexts are disposed exactly when Chrome itself would dispose them on
+a disconnect, which is when they were created with `disposeOnDetach: true`
+(Playwright's are). Tabs it opened stay open. If Chrome refuses any of that
+cleanup, or does not answer, the relay closes the held connection rather than
+hand the next client a browser in an unknown state; the next client then costs
+one prompt. While hold is on, `Browser.close` from any client ends that client,
+never your Chrome. A client that connects while the connection is in use gets
+its own connection and its own prompt. Chrome shows its "controlled by
+automated test software" banner for as long as the connection is held. Clients
+that need to work at the same time on one connection need the multiplexed proxy
+in `docs/planning/cdp-proxy.md`, which is still a plan.
 
 The icon is green when armed, amber when observing, grey when off, red when
 paused, and carries a running approval count - in the tooltip on Windows, in the

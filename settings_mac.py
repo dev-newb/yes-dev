@@ -86,11 +86,16 @@ class SettingsWindow:
         self.label(focus, "Choose the folder containing Chrome’s Local State file.",
                    22, 180, 576, 22, secondary=True)
         self.number(focus, "relay_port", "Local port", "default: 9333", 144)
-        self.label(focus, "Saved connection address", 22, 112, 550, 22, bold=True)
-        self.address = self.label(focus, "", 22, 78, 430, 26)
+        self.checkbox(focus, "relay_hold", "Keep one Chrome connection open, so Chrome asks once per launch", 22, 110)
+        self.fields["relay_hold"].setToolTip_(
+            "Clients take turns on one approved connection. A second client at the same time "
+            "gets its own connection and its own prompt. Chrome shows its automation banner "
+            "for as long as the connection is held.")
+        self.label(focus, "Saved connection address", 22, 80, 550, 22, bold=True)
+        self.address = self.label(focus, "", 22, 49, 430, 26)
         self.address.setSelectable_(True)
-        self.copy_button = self.button(focus, "Copy address", "copyAddress:", 454, 75, 144, 30)
-        self.relay_status = self.label(focus, "", 22, 21, 577, 45, secondary=True)
+        self.copy_button = self.button(focus, "Copy address", "copyAddress:", 454, 46, 144, 30)
+        self.relay_status = self.label(focus, "", 22, 4, 577, 40, secondary=True)
 
         self.error = self.label(content, "", 29, 53, 440, 44)
         self.error.setTextColor_(NSColor.systemRedColor())
@@ -179,7 +184,8 @@ class SettingsWindow:
 
     def focus_changed(self):
         active = self.choices["focus_mode"][self.fields["focus_mode"].indexOfSelectedItem()] == "relay"
-        for field in (self.fields["relay_profile"], self.fields["relay_port"], self.browse_button, self.copy_button):
+        for field in (self.fields["relay_profile"], self.fields["relay_port"], self.fields["relay_hold"],
+                      self.browse_button, self.copy_button):
             field.setEnabled_(active)
         self.refresh_status()
 
