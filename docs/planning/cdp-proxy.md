@@ -120,10 +120,18 @@ client that enabled discovery; everything else is session-scoped.
 
 ## Phases
 
-1. **Pass-through, one client at a time.** The proxy holds the upstream socket
-   open and forwards a single client verbatim; a second client waits or is
-   refused. This alone removes every prompt for sequential agent use, which is
-   most of the pain, and it is a day's work plus testing.
+1. **Pass-through, one client at a time.** *Built, as the relay's `hold`
+   option (`HeldConnection` in `cdp_relay.py`, "Keep one Chrome connection
+   open" in Settings).* The proxy holds the upstream socket open and lends it
+   to one client at a time. Two refinements over the plan above: message ids
+   are renumbered per client and stale replies and events dropped, and a client
+   arriving while the connection is lent gets its own upstream connection
+   instead of waiting or being refused. On release the relay undoes
+   browser-level settings, detaches sessions, disposes the contexts Chrome
+   itself would, and retires the connection if any of that fails. Run live
+   against Chrome 154 with Playwright and Puppeteer on 2026-10-02, which found
+   two bugs (auto-attach reset refused without `flatten`; `Browser.close` from a
+   concurrent client) that are now fixed and pinned by tests.
 2. **Concurrent clients with ownership.** Id mapping, session routing, the
    ownership rule for auto-attach, discovery fan-out, per-client cleanup.
    The bulk of the work. Needs a test matrix, below.

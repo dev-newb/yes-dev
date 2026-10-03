@@ -165,6 +165,12 @@ class RelayTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.focus.calls, 1)
         self.assertEqual(self.connections, 1)
 
+    async def test_without_hold_browser_close_is_forwarded_like_a_direct_connection(self):
+        client = await self.client()
+        await client.send(json.dumps({"id": 1, "method": "Browser.close", "params": {}}))
+        reply = json.loads(await asyncio.wait_for(client.recv(), 2))
+        self.assertEqual(reply["connection"], 1, "Browser.close did not reach Chrome")
+
     async def test_upstream_loss_closes_only_its_downstream(self):
         a, b = await self.client(), await self.client()
         await asyncio.gather(self.exchange(a, "one"), self.exchange(b, "two"))

@@ -293,7 +293,8 @@ def _is_visible(element) -> bool:
 class Engine:
     def __init__(self, observe: bool = False, poll_ms: int = POLL_MS_DEFAULT,
                  include_edge: bool = False, log_path: Path = LOG_PATH,
-                 exit_with_parent: bool = False, diagnostics: bool = False) -> None:
+                 exit_with_parent: bool = False, diagnostics: bool = False,
+                 parent_pid: int = 0) -> None:
         self.observe = observe
         self.poll_s = max(0.05, poll_ms / 1000.0)
         self.bundles = CHROME_BUNDLES + (EDGE_BUNDLES if include_edge else ())
@@ -301,7 +302,10 @@ class Engine:
         self.approved = 0
         self.exit_with_parent = exit_with_parent
         self.diagnostics = diagnostics
-        self._parent_pid = os.getppid()
+        # The supervisor's own pid when it passed one. Reading getppid() here is
+        # too late if the supervisor died while this process was still starting:
+        # the engine would record launchd as its parent and never notice.
+        self._parent_pid = parent_pid or os.getppid()
         self._seen: dict[str, float] = {}    # dedupe key -> last-press wall clock
         self._audited: set[tuple] = set()    # sheet-candidate decisions already logged
         self._first_seen: dict[str, float] = {}  # dedupe key -> sweep clock when first seen
@@ -494,20 +498,6 @@ class Engine:
             "AUDIT",
         )
 
-    def _raise_host(self, host) -> None:
-        """Best-effort AXRaise on the sheet and its parent window so the click lands."""
-        try:
-            AXUIElementPerformAction(host, "AXRaise")
-        except Exception:
-            pass
-        parent = _attr(host, "AXParent")
-        if parent is None:
-            return
-        try:
-            AXUIElementPerformAction(parent, "AXRaise")
-        except Exception:
-            pass
-
     def _sheet_still_up(self, host, button) -> bool:
         """True while the sheet that was pressed - that AX node, not whatever
         now sits at its coordinates - is still on screen with its Allow button.
@@ -682,19 +672,27 @@ class Engine:
         after that has nowhere safe to land. A second AXPress is never sent:
         it removes the sheet and leaves the socket unapproved, which reads as
         success and is not. A sheet that survives both is retried next sweep.
+
+        Nothing raises the sheet's window first. AXRaise was a leftover from when
+        the fallback was a pointer click, which needed the window on top; AXPress
+        and the keystroke both target the element directly. Raising only reordered
+        the user's Chrome windows, putting the one with the sheet above whichever
+        window they were working in.
         """
         seen_at = time.monotonic()
-        self._raise_host(host)
         ax_ok = self._press(button) is not None
+        # A sheet that goes without a successful press was dismissed by something
+        # else - teardown, or the user. Say so rather than credit a press.
+        pressed = "AXPress" if ax_ok else "AlreadyDismissed"
         time.sleep(VERIFY_WAIT_S)
         self._log_press_state(host, button, "after first AXPress")
         if not self._sheet_still_up(host, button):
-            return "AXPress" if ax_ok else "AXRaise"
+            return pressed
 
         guard_left = ACTIVATION_GUARD_S - (time.monotonic() - seen_at)
         if guard_left > 0:
             time.sleep(guard_left)
-        return self._key_approve(pid, host, button, "AXPress" if ax_ok else "AXRaise")
+        return self._key_approve(pid, host, button, pressed)
 
     def _element_summary(self, element) -> str:
         """Return the AX identity and geometry used to audit a pending click."""
@@ -863,6 +861,10 @@ def main(argv=None) -> int:
                     help="stop as soon as the launching process goes away; the "
                          "tray passes this so a dead tray cannot leave an engine "
                          "approving prompts unsupervised")
+    ap.add_argument("--parent-pid", type=int, default=0,
+                    help="the supervisor's pid, passed by the supervisor itself. Without it the "
+                         "parent is read at startup, which is too late if the parent has "
+                         "already exited: the helper then records launchd and never stops")
     ap.add_argument("--diagnostics", action="store_true",
                     help="log trust, process discovery, and AX sweep timing every 5s")
     args = ap.parse_args(argv)
@@ -870,7 +872,7 @@ def main(argv=None) -> int:
     engine = Engine(observe=args.observe, poll_ms=args.interval_ms,
                     include_edge=args.include_edge, log_path=Path(args.log_path),
                     exit_with_parent=args.exit_with_parent,
-                    diagnostics=args.diagnostics)
+                    diagnostics=args.diagnostics, parent_pid=args.parent_pid)
     if args.once:
         if not is_trusted():
             engine.log("NOT trusted for Accessibility - results will be empty.", "ERROR")

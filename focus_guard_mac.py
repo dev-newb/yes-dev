@@ -95,7 +95,8 @@ class Guard:
         self.log_path = Path(opts.log_path)
         self.watch_pids = set(opts.watch_pid or [])
         self.bundles = set(wm.CHROME_BUNDLES) | (set(wm.EDGE_BUNDLES) if opts.include_edge else set())
-        self.parent_pid = os.getppid()
+        # The supervisor's pid when it passed one; see watcher_mac.Engine.
+        self.parent_pid = getattr(opts, "parent_pid", 0) or os.getppid()
         self.restores = 0
         self.skips = 0
         front = NSWorkspace.sharedWorkspace().frontmostApplication()
@@ -278,6 +279,10 @@ def main(argv=None) -> int:
                     help="seconds without user input before an activation counts as the browser's own")
     ap.add_argument("--exit-with-parent", action="store_true",
                     help="stop when the launching process goes away")
+    ap.add_argument("--parent-pid", type=int, default=0,
+                    help="the supervisor's pid, passed by the supervisor itself. Without it the "
+                         "parent is read at startup, which is too late if the parent has "
+                         "already exited: the helper then records launchd and never stops")
     ap.add_argument("--watch-pid", type=int, action="append",
                     help="(testing) watch this process instead of the browsers; repeatable")
     ap.add_argument("--no-require-sheet", dest="require_sheet", action="store_false",

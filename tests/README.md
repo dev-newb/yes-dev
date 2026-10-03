@@ -196,6 +196,44 @@ SIGTERM check and the verification pair both confirmed orderly exit and runtime
 cleanup. Policy tests cover intervening input, expiry, identity changes and
 disconnects; deliberate user input was not part of this live comparison.
 
+## Held connection (macOS)
+
+`tests/test_cdp_relay_hold.py` runs the relay with `hold=True` against a
+scripted fake Chrome on loopback. The fake answers every call, hands out
+session and browser-context ids the way Chrome does, can emit events and late
+replies on request, and records everything it receives with the ids it saw.
+It is strict where real Chrome 154 was strict in the 2026-10-02 live run: it
+refuses browser-level `Target.setAutoAttach` without `flatten`, and it refuses
+to detach a session it does not have. Tests can make it refuse or ignore other
+calls, and its `Browser.close` ends every connection, as Chrome exiting would.
+
+Twenty-one tests cover one prompt for sequential clients, per-client id
+renumbering, a departed client's late reply and stale session events never
+reaching the next client, the undo list and its order, auto-attach really off
+for the next client, a refused or unanswered reset retiring the connection, an
+already-gone session not retiring it, contexts disposed only as Chrome would,
+`Browser.close` from the held and from a concurrent client, a concurrent client
+falling back to its own connection, losing Chrome, a Chrome restart between
+clients, malformed messages, a client leaving while Chrome is being asked,
+status and shutdown. The relay before the live run fails six of them, and each
+fix undone on its own is caught.
+
+`tests/mac/verify_hold_live.py` (with `hold_puppeteer_probe.mjs`) is the live
+driver against real Chrome and real Playwright and Puppeteer. It needs a
+disposable consent-mode Chrome and its verified pid, and two of its modes need
+an operator's hands; see its `--help`.
+
+`tests/mac/test_parent_exit.py` covers helpers stopping when their supervisor
+is gone, including a supervisor that died before the helper finished starting.
+The tray tests fail if anything in them tries to start a real process.
+
+`tests/mac/test_early_focus_events.py` covers the early-focus helper's
+event-driven loop with a real run loop and real Unix sockets: servicing
+without a timer, two messages in one read, the hold limit, closing a socket's
+run-loop source before the socket, and the fast tick running only while a
+request is armed. `tests/mac/test_approve_no_raise.py` pins the approval path
+to a single press, with no window raised.
+
 ## Thin relay integration (macOS)
 
 `relay_mac.py` runs the local relay; the tray starts it when Fast focus is
