@@ -272,6 +272,8 @@ class LiveRun:
         if fresh: await self.start_relay(name)
         self.current = {'name': name, 'started': time.time(), 'passed': False, 'details': {}}
         before = self.count_approvals()
+        relay_log=self.out/'relay.log'
+        log_offset=len(relay_log.read_text()) if relay_log.exists() else 0
         try:
             await callback(self.current['details'])
             self.current['passed'] = True
@@ -280,6 +282,26 @@ class LiveRun:
             self.current['traceback'] = traceback.format_exc()
         finally:
             await self.settled()
+            added=relay_log.read_text()[log_offset:] if relay_log.exists() else ''
+            warnings=[line for line in added.splitlines() if 'Chrome refused' in line or 'Retiring the held connection' in line]
+            resets=[]
+            trace_path=self.out/f'{name}-upstream.jsonl'
+            if trace_path.exists():
+                frames=[json.loads(line) for line in trace_path.read_text().splitlines()]
+                for frame in frames:
+                    message=frame['message']
+                    if (frame['direction']=='sent' and isinstance(message,dict)
+                        and message.get('method')=='Target.setAutoAttach' and message.get('params',{}).get('autoAttach') is False):
+                        reply=next((f['message'] for f in frames if f['direction']=='received'
+                            and f['socket']==frame['socket'] and isinstance(f['message'],dict)
+                            and f['message'].get('id')==message.get('id')),None)
+                        resets.append({'request':message,'reply':reply})
+            self.current['details']['reset_audit']={'unexpected_log_lines':warnings,'autoattach_resets':resets}
+            reset_bad=any(r['request']['params'].get('flatten') is not True or r['reply'] is None
+                          or 'error' in r['reply'] for r in resets)
+            if warnings or reset_bad or (name=='a-sequential' and not resets):
+                self.current['passed']=False
+                self.current['reset_audit_failed']=True
             self.current.update(ended=time.time(), approvals=self.count_approvals()-before)
             self.cases.append(self.current)
             write_json(self.out/'cases.json', self.cases)
@@ -308,6 +330,9 @@ class LiveRun:
             result['last'] = await self.work(cdp, 'YesDev A raw last')
             result['unexpected_events_before_work'] = cdp.events[:]
             result['unsolicited_replies'] = cdp.unsolicited[:]
+            result['inherited_paused_attachments']=[e for e in cdp.events if
+                e.get('method')=='Target.attachedToTarget' and e.get('params',{}).get('waitingForDebugger') is True]
+            assert not result['inherited_paused_attachments'],result
         await self.settled()
         result['approval_count'] = self.count_approvals()-before
         result['banner_while_held_between_clients'] = banner_snapshot(self.browser_pid)
@@ -338,24 +363,34 @@ class LiveRun:
         assert created and created.isdisjoint(result['after']['browserContextIds']), result
         assert result['default_survived'], result
 
-    async def parity(self, result):
+    async def parity(self, result, direct=True):
+        before=self.count_approvals()
         result['variants'] = []
         for setting in (None, False, True):
             item = {'disposeOnDetach': 'omitted' if setting is None else setting}
             params = {} if setting is None else {'disposeOnDetach': setting}
-            async with self.client(f'c-create-{setting}', direct=True) as cdp:
+            async with self.client(f'c-create-{setting}', direct=direct) as cdp:
                 item['version'] = await cdp.call('Browser.getVersion')
                 context = (await cdp.call('Target.createBrowserContext', params))['browserContextId']
                 item['context'] = context
                 item['work'] = await self.work(cdp, 'YesDev C parity', context)
             await self.settled()
-            async with self.client(f'c-observer-{setting}', direct=True) as cdp:
+            async with self.client(f'c-observer-{setting}', direct=direct) as cdp:
                 after = await cdp.call('Target.getBrowserContexts')
                 item['after_disconnect'] = after
                 item['survived'] = context in after['browserContextIds']
                 if item['survived']: await cdp.call('Target.disposeBrowserContext', {'browserContextId': context})
             result['variants'].append(item)
-        result['interpretation'] = 'Relay always-dispose diverges from native default' if result['variants'][0]['survived'] else 'Native default also disposes in this run'
+        result['via']='direct' if direct else 'held_relay'
+        result['survival']=[v['survived'] for v in result['variants']]
+        result['matches_measured_native_rule']=result['survival']==[True,True,False]
+        await self.settled()
+        result['approval_count']=self.count_approvals()-before
+        assert result['matches_measured_native_rule'],result
+        if not direct: assert result['approval_count']==1,result
+
+    async def relay_parity(self,result):
+        await self.parity(result,direct=False)
 
     async def close_clients(self, result):
         from playwright.async_api import async_playwright
@@ -403,6 +438,10 @@ class LiveRun:
             await asyncio.sleep(.2)
             result['stray_events'] = cdp.events[:]
             result['stray_replies'] = cdp.unsolicited[:]
+            result['reuse_page_work']=await self.work(cdp,'YesDev F successor page')
+            result['inherited_paused_attachments']=[e for e in cdp.events if
+                e.get('method')=='Target.attachedToTarget' and e.get('params',{}).get('waitingForDebugger') is True]
+            assert not result['inherited_paused_attachments'],result
         await self.settled()
         result['approval_count'] = self.count_approvals()-before
         assert result['approval_count'] == 1, result
@@ -497,15 +536,24 @@ class LiveRun:
         return {'time':time.time(),'foreground':foreground(),'windows_front_to_back':order}
 
     async def background_window(self,result):
-        async with self.client('window-setup',direct=True) as setup:
-            result['setup_version']=await setup.call('Browser.getVersion')
-            result['extra_window']=await setup.call('Target.createTarget',{
-                'url':'data:text/html,<title>YesDev Window Order</title><p>Disposable window-order fixture</p>',
-                'newWindow':True,'background':True,'left':240,'top':180,'width':850,'height':600})
-        await self.settled()
+        if self.args.reuse_background_windows:
+            result['existing_windows']=self.window_snapshot()
+            assert len(result['existing_windows']['windows_front_to_back'])==2,'Expected exactly two existing disposable windows'
+            assert not any(w['sheet'] for w in result['existing_windows']['windows_front_to_back']), 'An existing consent dialog can belong to an expired client; restart disposable Chrome before this test'
+        else:
+            async with self.client('window-setup',direct=True) as setup:
+                result['setup_version']=await setup.call('Browser.getVersion')
+                existing=self.window_snapshot()['windows_front_to_back']
+                left,top=next((x,y) for x,y in [(240,180),(80,60),(380,260)]
+                    if all(abs(w['x']-x)>1 or abs(w['y']-y)>1 for w in existing))
+                result['extra_window_geometry']={'left':left,'top':top}
+                result['extra_window']=await setup.call('Target.createTarget',{
+                    'url':'data:text/html,<title>YesDev Window Order</title><p>Disposable window-order fixture</p>',
+                    'newWindow':True,'background':True,'left':left,'top':top,'width':850,'height':600})
+            await self.settled()
         await self.stop(self.engine)
         result['engine_approvals_before']=self.count_approvals()
-        before_log=(self.out/'engine.log').read_text()
+        before_log=(self.out/'engine.log').read_text() if (self.out/'engine.log').exists() else ''
         async def pending_grant():
             async with connect(read_endpoint(self.profile).url,proxy=None,open_timeout=self.args.ui_timeout+20,
                                ping_interval=None) as ws:
@@ -514,6 +562,8 @@ class LiveRun:
                     reply=json.loads(await ws.recv())
                     if reply.get('id')==1:return reply
         pending=asyncio.create_task(pending_grant())
+        write_json(self.out/'ui-request.json',{'action':'arrange_disposable_background_consent_window',
+            'browser_pid':self.browser_pid,'instructions':'Bring the disposable Chrome window without the consent dialog above the one with the dialog, then click a non-Chrome app and keep hands off. The watcher starts automatically when CGWindowList and AX confirm the arrangement.'})
         print('UI_STEP Put the consent sheet behind the OTHER disposable Chrome window, then switch to a non-Chrome app. Detection is automatic.',flush=True)
         deadline=time.monotonic()+self.args.ui_timeout
         try:
@@ -522,7 +572,7 @@ class LiveRun:
                 write_json(self.out/'window-setup-current.json',snapshot)
                 windows=snapshot['windows_front_to_back']
                 front=snapshot['foreground']
-                if (len(windows)>=2 and not windows[0]['sheet'] and any(w['sheet'] for w in windows[1:])
+                if (len(windows)==2 and not windows[0]['sheet'] and sum(w['sheet'] for w in windows)==1
                     and not front['bundle'].startswith('com.google.Chrome') and front['idle']>=2):
                     result['before']=snapshot
                     break
@@ -538,8 +588,11 @@ class LiveRun:
             added=(self.out/'engine.log').read_text()[len(before_log):]
             result['engine_excerpt']=added
             result['window_order_unchanged']=[w['id'] for w in result['before']['windows_front_to_back']]==[w['id'] for w in result['after']['windows_front_to_back']]
+            result['all_consent_dialogs_gone']=not any(w['sheet'] for w in result['after']['windows_front_to_back'])
             assert 'product' in result['reply'].get('result',{}),result
-            assert len(re.findall('APPROVED via AXPress',added))==1 and result['window_order_unchanged'],result
+            assert (len(re.findall('APPROVED via AXPress',added))==1 and result['window_order_unchanged']
+                    and result['all_consent_dialogs_gone'] and 'FAILED:' not in added
+                    and not re.search(r'sent (?:Tab|Space) to pid',added)),result
         finally:
             pending.cancel()
             with suppress(asyncio.CancelledError):await pending
@@ -554,12 +607,15 @@ class LiveRun:
             await self.settled()
             result['verified_disposable_pid']=disposable_pid(self.profile)
             result['close_reply']=await second.call('Browser.close')
+            await asyncio.wait_for(second.ws.wait_closed(),5)
             await asyncio.sleep(2)
             result['chrome_process_alive']=bool(subprocess.run(
                 ['ps','-p',str(self.browser_pid),'-o','pid='],capture_output=True).stdout.strip())
             result['held_socket_close_code']=first.ws.close_code
             result['concurrent_socket_close_code']=second.ws.close_code
             assert result['chrome_process_alive'],'Concurrent Browser.close exited disposable Chrome'
+            assert result['concurrent_socket_close_code']==1000,result
+            result['held_survivor_page_work']=await self.work(first,'YesDev held survivor after concurrent close')
         finally:
             await first.__aexit__()
             if second is not None: await second.__aexit__()
@@ -608,8 +664,18 @@ class LiveRun:
         result['banner_between_clients']=banner_snapshot(self.browser_pid)
 
     async def autoattach(self,result):
+        from playwright.async_api import async_playwright
+        pw=await async_playwright().start()
+        try:
+            browser=await pw.chromium.connect_over_cdp(self.address,timeout=15000)
+            page=await browser.contexts[0].new_page()
+            await page.goto('data:text/html,<title>YesDev Manual Tab Fixture</title><p>Disposable Chrome</p>')
+            result['playwright_value']=await page.evaluate('6*7')
+        finally: await pw.stop()
+        await self.settled()
         async with self.client('d-autoattach') as cdp:
             result['version']=await cdp.call('Browser.getVersion')
+            result['targets_before_native_step']=await cdp.call('Target.getTargets')
             result['set_autoattach']=await cdp.call('Target.setAutoAttach',
                 {'autoAttach':True,'waitForDebuggerOnStart':True,'flatten':True})
         await asyncio.sleep(2.5)
@@ -631,21 +697,28 @@ class LiveRun:
         result['fixture_hits']=self.fixture_hits[:]
         result['script_executed']=any(x['path']=='/script-executed' for x in self.fixture_hits)
         assert result['script_executed'],'Native new tab did not execute its load script after owner disconnected'
+        async with self.client('d-native-result-observer') as cdp:
+            result['targets_after_native_step']=await cdp.call('Target.getTargets')
+        previous={t['targetId'] for t in result['targets_before_native_step']['targetInfos']}
+        result['new_native_targets']=[t for t in result['targets_after_native_step']['targetInfos']
+            if t['targetId'] not in previous and t.get('url')==request['url']]
+        assert result['new_native_targets'],'Loaded URL was not a new tab in the disposable Chrome'
 
     async def run(self):
         write_json(self.out/'run.json', {'started':self.started.isoformat(),'browser_pid':self.browser_pid,
            'profile':str(self.profile),'repo_commit':subprocess.check_output(['git','rev-parse','HEAD'],cwd=ROOT,text=True).strip(),
            'source_sha256':{name:hashlib.sha256((ROOT/name).read_bytes()).hexdigest() for name in ('cdp_relay.py','relay_mac.py','watcher_mac.py','early_focus_guard_mac.py')},
            'instrumentation':'Upstream send/recv recording only; watcher discovery restricted to verified disposable profile.'})
-        self.engine=self.spawn([Path(__file__),'--watcher-child','--diagnostics','--exit-with-parent',
-                                '--log-path',self.out/'engine.log'], 'watcher',{'YESDEV_TEST_PROFILE':str(self.profile)})
+        if not self.args.reuse_background_windows:
+            self.engine=self.spawn([Path(__file__),'--watcher-child','--diagnostics','--exit-with-parent',
+                                    '--log-path',self.out/'engine.log'], 'watcher',{'YESDEV_TEST_PROFILE':str(self.profile)})
         sampler=asyncio.create_task(self.sample_foreground())
         sequence=[('a-sequential',self.sequential),('b-contexts',self.contexts),('c-direct-parity',self.parity),
                   ('e-browser-close',self.close_clients),('f-puppeteer',self.puppeteer),
                   ('g-concurrent',self.concurrent),('h-restart',self.restart),
                   ('i-idle-and-banner',self.idle),('d-native-tab-after-autoattach',self.autoattach)]
         if self.args.only: sequence=[x for x in sequence if x[0] in self.args.only]
-        extras={'q-direct-queue':self.queue,'w-background-window':self.background_window,
+        extras={'c-relay-parity':self.relay_parity,'q-direct-queue':self.queue,'w-background-window':self.background_window,
                 'x-concurrent-close':self.concurrent_close}
         sequence += [(name,callback) for name,callback in extras.items() if name in (self.args.only or [])]
         if not sequence: raise ValueError('No recognized scenarios selected')
@@ -719,7 +792,9 @@ if __name__=='__main__':
     p.add_argument('--puppeteer-module',type=Path)
     p.add_argument('--idle-seconds',type=float,default=600)
     p.add_argument('--ui-timeout',type=float,default=120)
+    p.add_argument('--reuse-background-windows',action='store_true',help='Resume the native window check using exactly two existing disposable windows; no setup approval')
     p.add_argument('--only',action='append')
     args=p.parse_args()
+    if args.reuse_background_windows and args.only!=['w-background-window']:p.error('--reuse-background-windows requires only w-background-window')
     if not 1024<=args.port<=65535 or args.idle_seconds<=0 or args.ui_timeout<=0: p.error('Invalid port or duration')
     raise SystemExit(asyncio.run(LiveRun(args).run()))
