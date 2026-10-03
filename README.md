@@ -11,18 +11,18 @@ debugging endpoint. If you drive Chrome with more than one agent or automation
 client, those prompts stack up and each one blocks its client until a human
 clicks Allow. `Yes, Dev` sits in the tray and answers them.
 
-**Latest release: [v1.3.0 - Settings window, fast focus, and a leak-free engine on macOS](https://github.com/dev-newb/yes-dev/releases/tag/v1.3.0).**
-[Download the source ZIP](https://github.com/dev-newb/yes-dev/archive/refs/tags/v1.3.0.zip)
+**Latest release: [v1.4.0 - one Chrome prompt per launch on macOS](https://github.com/dev-newb/yes-dev/releases/tag/v1.4.0).**
+[Download the source ZIP](https://github.com/dev-newb/yes-dev/archive/refs/tags/v1.4.0.zip)
 and follow the [Windows](#windows) or [macOS](#macos) install steps. This is a
 Python source release, not a standalone installer.
 
-On macOS this release adds a native **Settings…** window in place of the menu's
-option lists, **Fast focus** through a local relay, which cuts the interruption
-from a consent prompt from about 430 ms to about 70 ms for clients routed
-through it, and a repair for the engine and the clouds, which were growing by
-almost a megabyte a minute while idle and now hold steady. It contains
-everything in v1.2.2 (macOS on Chrome 153 and 154) and v1.2.1 (the Windows
-approval and counter fixes); Windows users have nothing new to install.
+On macOS this release adds **Keep one Chrome connection open**, an option under
+Fast focus that lends one approved connection to your agents in turn, so Chrome
+asks once per launch instead of once for every client. Helpers can no longer
+outlive the menu-bar app, the fast-focus helper no longer costs anything while
+idle, and approving a prompt no longer reorders your Chrome windows. It builds
+on v1.3.0, which added the native **Settings…** window, Fast focus itself, and
+the engine memory repair; Windows users have nothing new to install.
 
 Measured on Chrome 151: four parallel attaches went from ~35 seconds of waiting
 on a human to **2.4-4.4 seconds**, unattended.
@@ -109,7 +109,7 @@ profile can also use approval mode, as the isolated tests do.
 
 ## Install
 
-Download the [v1.3.0 source ZIP](https://github.com/dev-newb/yes-dev/archive/refs/tags/v1.3.0.zip)
+Download the [v1.4.0 source ZIP](https://github.com/dev-newb/yes-dev/archive/refs/tags/v1.4.0.zip)
 and extract it, or clone the current repository:
 
 ```bash

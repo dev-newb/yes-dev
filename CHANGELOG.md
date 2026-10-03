@@ -3,7 +3,13 @@
 Newest first. Each entry says what changed and, where it matters, what was
 measured - the numbers are from this repo's own runs, not estimates.
 
-## Unreleased
+## 1.4.0 - 2026-10-03
+
+macOS: optionally keep one Chrome connection open, so Chrome asks once per
+launch instead of once per client; helpers that can no longer outlive the tray;
+a fast-focus helper that costs nothing while idle; and Chrome windows that stay
+where you put them during an approval. Windows users have nothing new to
+install.
 
 ### macOS: hold one Chrome connection, so Chrome asks once per launch
 
@@ -47,6 +53,11 @@ what real Chrome refused; the first version of the relay fails six of the new
 tests, and every fix, undone on its own, is caught by the matching test.
 Sequential reuse with one prompt, context disposal, Puppeteer, concurrent
 fallback, Chrome restart, ten idle minutes and the banner all passed live.
+After the fixes, a second live run passed all eight relay cases with no
+refused or abandoned reset: the next client's pages load, a concurrent
+client's `Browser.close` leaves Chrome running, and contexts survive or go
+exactly as over a direct connection. A tab opened by hand after Playwright
+left loaded and ran its script, so nothing was left waiting for a debugger.
 
 ### macOS: helpers stop with the tray even if it died while they were starting
 
@@ -57,7 +68,10 @@ died while a helper was still starting, the answer was already launchd and the
 helper ran forever. That happened on this Mac: a faulty test left two engines
 running unsupervised for about half an hour. They approved nothing. The tray
 now passes its own pid, and every helper started by a parent that has already
-gone exits on its first check.
+gone exits on its first check. Live, the real tray was killed eleven times,
+including five times in the instant after its helpers were created and before
+the engine had finished starting; no helper outlived it by more than a second
+in any trial.
 
 ### macOS: the fast-focus helper no longer polls
 
@@ -82,8 +96,9 @@ the sheet jumped above the one you were using. First proposed in
 [#7](https://github.com/dev-newb/yes-dev/pull/7). A sheet that disappears
 without a successful press is now logged as `AlreadyDismissed` rather than
 credited to a raise. Three queued prompts were approved live with one press
-each and no fallback; that the window order now stays put has not yet been
-checked by hand.
+each and no fallback. With the sheet on a Chrome window behind another, the
+approval took one press, both windows kept their order and position, and
+Chrome never came to the front.
 
 ## 1.3.0 - 2026-10-02
 
