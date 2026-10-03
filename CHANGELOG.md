@@ -3,6 +3,17 @@
 Newest first. Each entry says what changed and, where it matters, what was
 measured - the numbers are from this repo's own runs, not estimates.
 
+## Unreleased
+
+### Windows: check the current dialog owner
+
+Resolve each consent dialog's owning process by PID instead of caching browser
+PIDs for five seconds. A restarted Chrome or Edge can now pass the owner check
+on the next sweep. Unknown or unreadable owners remain blocked, with one warning
+while a mismatch persists. Credit to @Long-Trinh-Tien for the per-PID lookup in
+[401eb63](https://github.com/Long-Trinh-Tien/yes-dev/commit/401eb63516bf28a165675ffe4ba14740b603e7e1).
+The fork's comma-splitting fix was already included through @Icather's PR #3.
+
 ## 1.4.0 - 2026-10-03
 
 macOS: optionally keep one Chrome connection open, so Chrome asks once per

@@ -224,9 +224,9 @@ public static class Provider {
     $loop=$ast.EndBlock.Statements | Where-Object {$_ -is [System.Management.Automation.Language.WhileStatementAst]}
     $loopText=$loop.Body.Extent.Text.Trim()
     $sweep=[scriptblock]::Create($loopText.Substring(1,$loopText.Length-2))
-    $Observe=$false; $parent=$null; $approved=0; $lastSeen=@{}; $procIds=@()
+    $Observe=$false; $parent=$null; $approved=0; $lastSeen=@{}
     $pendingApprovals=@{}
-    $pidsAt=[datetime]::MinValue; $lastTidy=[datetime]::Now; $procIdsWarned=$false; $IntervalMs=1
+    $lastTidy=[datetime]::Now; $ownerWarned=$false; $IntervalMs=1
     Check 'Real window discovery and process filtering: English' {
         [void][DesktopName]::SetWindowText($dialog,'Allow remote debugging?')
         Expect (Find-DialogWindows).Count 1
@@ -266,7 +266,7 @@ public static class Provider {
         Expect (Find-DialogWindows).Count 1
     }
     Check 'Real process filter rejects unconfigured process' {
-        $BrowserProcess=@('yesdev-no-such-process'); $procIds=@(); $pidsAt=[datetime]::MinValue; $lastSeen=@{}; $approved=0
+        $BrowserProcess=@('yesdev-no-such-process'); $lastSeen=@{}; $approved=0
         . $sweep
         Expect $approved 0
         Wait-Count 35 2
