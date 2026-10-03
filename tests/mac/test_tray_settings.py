@@ -104,7 +104,9 @@ class TraySettingsTests(unittest.TestCase):
                 self.app.cfg.update(relay_hold=hold)
                 with patch.object(tray.subprocess, "Popen") as popen:
                     self.app.start_relay()
-                self.assertEqual("--hold" in popen.call_args.args[0], hold)
+                args = popen.call_args.args[0]
+                self.assertEqual("--hold" in args, hold)
+                self.assertEqual("--prime" in args, hold, "connect at launch goes with hold")
 
     def test_changing_hold_restarts_the_relay(self):
         engine, relay = Mock(), Mock()

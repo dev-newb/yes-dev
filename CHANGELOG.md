@@ -3,6 +3,34 @@
 Newest first. Each entry says what changed and, where it matters, what was
 measured - the numbers are from this repo's own runs, not estimates.
 
+## Unreleased
+
+### macOS: Chrome asks for the held connection when you open it
+
+With **Keep one Chrome connection open** on, the one prompt per launch used to
+come whenever the first agent connected, which could be while you were working
+in another app. Now the relay opens the held connection as soon as you start
+Chrome yourself: once Chrome is the active app with its window on top, and
+there has been no keyboard or mouse input for two seconds, so the sheet does not
+catch a keystroke and a Space does not press Cancel. Chrome is already in front
+at that moment, so the prompt takes nothing from you, and later agents find the
+connection open.
+
+It only happens for a Chrome that started while Yes, Dev was running, so an
+already-open Chrome is never prompted out of turn; only within a minute of the
+launch; and only once per launch, so a prompt you cancel is not repeated. If
+Chrome starts in the background or you are busy in it, nothing changes: the
+first agent opens the connection, as in 1.4.0.
+
+Which app is in front is read from Launch Services and the window server
+together. NSWorkspace goes stale in a process without an AppKit event loop, and
+the system-wide Accessibility query answered "cannot complete" on this Mac.
+
+Fourteen new tests cover the launch decision, with stub probes and a fake
+clock, and opening the held connection with no client against the strict fake
+Chrome. Each rule, removed on its own, fails a test. Not yet run against a real
+Chrome launch.
+
 ## 1.4.0 - 2026-10-03
 
 macOS: optionally keep one Chrome connection open, so Chrome asks once per

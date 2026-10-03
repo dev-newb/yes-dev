@@ -9,17 +9,86 @@ import logging
 from logging.handlers import RotatingFileHandler
 import os
 from pathlib import Path
+import re
 import signal
 import sys
 import tempfile
 import time
 import uuid
 
-from cdp_relay import Relay
+from cdp_relay import LaunchPrimer, Relay, read_endpoint
 from platform_mac import DATA_DIR
 
 ROOT = Path(__file__).resolve().parent
 LOGGER = logging.getLogger("yesdev.relay")
+
+
+async def listener_pid(port):
+    """The one process listening on Chrome's debugging port, or None."""
+    lookup = await asyncio.create_subprocess_exec(
+        "/usr/sbin/lsof", "-nP", "-t", f"-iTCP:{port}", "-sTCP:LISTEN",
+        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
+    try:
+        stdout, _ = await asyncio.wait_for(lookup.communicate(), 2)
+    finally:
+        if lookup.returncode is None:
+            with suppress(ProcessLookupError):
+                lookup.kill()
+            await lookup.wait()
+    pids = set(stdout.decode().split())
+    if len(pids) != 1 or not next(iter(pids)).isdigit():
+        return None
+    return int(next(iter(pids)))
+
+
+async def _output(*command):
+    """A short helper command's stdout, or b"" if it fails or takes over two seconds."""
+    process = await asyncio.create_subprocess_exec(
+        *command, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
+    try:
+        stdout, _ = await asyncio.wait_for(process.communicate(), 2)
+        return stdout
+    except asyncio.TimeoutError:
+        return b""
+    finally:
+        if process.returncode is None:
+            with suppress(ProcessLookupError):
+                process.kill()
+            await process.wait()
+
+
+async def front_pid_with_window():
+    """The active app's pid, if its window is the one on top; else None.
+
+    Two sources must agree. Launch Services names the active app, and the
+    window server's topmost visible normal window must belong to it, so a
+    windowless active app is never mistaken for the Chrome window behind it.
+    Not NSWorkspace, which goes stale in a process with no AppKit event loop,
+    and not the system-wide AXFocusedApplication, which answers "cannot
+    complete" on this Mac (2026-10-03).
+    """
+    from Quartz import (CGWindowListCopyWindowInfo, kCGNullWindowID,
+                        kCGWindowListExcludeDesktopElements, kCGWindowListOptionOnScreenOnly)
+    front = re.search(rb"ASN:[0-9a-fx-]+", await _output("/usr/bin/lsappinfo", "front"))
+    if front is None:
+        return None
+    match = re.search(rb'"pid"=(\d+)', await _output("/usr/bin/lsappinfo", "info", "-only", "pid",
+                                                      front.group(0).decode()))
+    if match is None:
+        return None
+    active = int(match.group(1))
+    windows = CGWindowListCopyWindowInfo(
+        kCGWindowListOptionOnScreenOnly | kCGWindowListExcludeDesktopElements, kCGNullWindowID) or []
+    top = next((w for w in windows
+                if w.get("kCGWindowLayer") == 0 and (w.get("kCGWindowAlpha") or 0) > 0), None)
+    if top is None or int(top.get("kCGWindowOwnerPID", -1)) != active:
+        return None
+    return active
+
+
+def idle_seconds():
+    from Quartz import CGEventSourceSecondsSinceLastEventType, kCGEventSourceStateCombinedSessionState
+    return CGEventSourceSecondsSinceLastEventType(kCGEventSourceStateCombinedSessionState, 0xFFFFFFFF)
 
 
 class MacFocus:
@@ -32,20 +101,9 @@ class MacFocus:
         self.session = None
 
     async def prepare(self, endpoint):
-        lookup = await asyncio.create_subprocess_exec(
-            "/usr/sbin/lsof", "-nP", "-t", f"-iTCP:{endpoint.port}", "-sTCP:LISTEN",
-            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
-        try:
-            stdout, _ = await asyncio.wait_for(lookup.communicate(), 2)
-        finally:
-            if lookup.returncode is None:
-                with suppress(ProcessLookupError):
-                    lookup.kill()
-                await lookup.wait()
-        pids = set(stdout.decode().split())
-        if len(pids) != 1 or not next(iter(pids)).isdigit():
+        pid = await listener_pid(endpoint.port)
+        if pid is None:
             raise RuntimeError("Cannot identify the Chrome process; reopen Chrome and try again")
-        pid = int(next(iter(pids)))
         key = (pid, endpoint)
         if self.key == key and self.process is not None and self.process.returncode is None:
             return
@@ -147,12 +205,26 @@ async def run(args):
         loop.add_signal_handler(sig, stopping.set)
     # The supervisor's pid when it passed one; see watcher_mac.Engine.
     parent = args.parent_pid or os.getppid()
+    primer = priming = None
     try:
         await relay.start()
         LOGGER.info("Listening at %s", relay.address)
+        if args.prime and relay.held is not None:
+            def current_endpoint():
+                try:
+                    return read_endpoint(args.profile)
+                except (OSError, ValueError):
+                    return None
+            primer = LaunchPrimer(relay.held, current_endpoint,
+                                  lambda endpoint: listener_pid(endpoint.port),
+                                  front_pid_with_window, idle_seconds)
         while not stopping.is_set():
             if args.exit_with_parent and os.getppid() != parent:
                 break
+            # A tick that opens the connection waits for the prompt to be
+            # approved; run it beside the loop so the parent check carries on.
+            if primer is not None and (priming is None or priming.done()):
+                priming = asyncio.create_task(primer.tick())
             try:
                 await asyncio.wait_for(stopping.wait(), 1)
             except asyncio.TimeoutError:
@@ -162,6 +234,9 @@ async def run(args):
         LOGGER.exception("Relay stopped")
         return 1
     finally:
+        if priming is not None and not priming.done():
+            priming.cancel()
+            await asyncio.gather(priming, return_exceptions=True)
         await relay.close()
     return 0
 
@@ -179,6 +254,9 @@ def main():
                          "already exited: the helper then records launchd and never stops")
     p.add_argument("--hold", action="store_true",
                    help="keep one approved Chrome connection open and lend it to one client at a time")
+    p.add_argument("--prime", action="store_true",
+                   help="with --hold, open that connection as soon as a newly started Chrome is "
+                        "frontmost and idle, so no client triggers the prompt later")
     a = p.parse_args()
     if not 1024 <= a.port <= 65535:
         p.error("port must be between 1024 and 65535")

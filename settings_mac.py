@@ -88,8 +88,9 @@ class SettingsWindow:
         self.number(focus, "relay_port", "Local port", "default: 9333", 144)
         self.checkbox(focus, "relay_hold", "Keep one Chrome connection open, so Chrome asks once per launch", 22, 110)
         self.fields["relay_hold"].setToolTip_(
-            "Clients take turns on one approved connection. A second client at the same time "
-            "gets its own connection and its own prompt. Chrome shows its automation banner "
+            "Chrome asks when you open it, while you are already in it, instead of when an agent "
+            "first connects. Clients take turns on that connection; a second client at the same "
+            "time gets its own connection and its own prompt. Chrome shows its automation banner "
             "for as long as the connection is held.")
         self.label(focus, "Saved connection address", 22, 80, 550, 22, bold=True)
         self.address = self.label(focus, "", 22, 49, 430, 26)
