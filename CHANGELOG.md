@@ -5,6 +5,28 @@ measured - the numbers are from this repo's own runs, not estimates.
 
 ## Unreleased
 
+### macOS: fast focus no longer stalls or refuses back-to-back connections
+
+1.4.0 broke fast focus for agents that connect in quick succession, and slowed
+every fast-focus connection by two seconds. The early-focus helper answered the
+first message on each control connection and never noticed the second, so the
+relay waited out a two-second timeout on every connection; and an agent arriving
+within six seconds of the previous one found the helper still holding that dead
+connection and was refused. Codex's three-client run hit it as an intermittent
+"Connection lost".
+
+The cause was the 1.4.0 change that stopped the helper polling. Its sockets are
+watched by CoreFoundation, and a watch armed while data is already waiting
+drops its callback if anything else reads that data first, after which it never
+fires again. The helper accepted a connection and read its first message in the
+same pass, which did exactly that. Now each socket is read only by its own watch:
+the listening socket's watch only accepts, a client's watch only reads. Against
+the real helper, five back-to-back control connections went from every reply
+timing out and every other connection refused to every reply in under 4 ms. Idle
+CPU stays at zero. Four new run-loop tests cover a message waiting at accept and
+a later one, back-to-back connections, a refused second connection, and a quiet
+connection staying quiet.
+
 ### macOS: Chrome asks for the held connection when you open it
 
 With **Keep one Chrome connection open** on, the one prompt per launch used to

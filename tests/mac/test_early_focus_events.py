@@ -36,10 +36,14 @@ class Hooks:
         self.server_ref = server_ref
         self.opened, self.closing = [], []
         self.client_watch = None
+        self.client_callbacks = 0
 
     def client_opened(self, sock):
         self.opened.append(sock.fileno())
-        self.client_watch = early.FdWatch(sock.fileno(), lambda: self.server_ref().ready())
+        def read():
+            self.client_callbacks += 1
+            self.server_ref().read_pending()
+        self.client_watch = early.FdWatch(sock.fileno(), read)
 
     def client_closing(self, sock):
         self.closing.append(sock.fileno())
@@ -57,7 +61,7 @@ class RunLoopControlTests(unittest.TestCase):
         self.hooks = Hooks(lambda: self.server)
         self.server = early.ControlServer(self.path, "t", self.handle,
                                           lambda: self.drops.append(True), watch=self.hooks)
-        self.listen_watch = early.FdWatch(self.server.listener.fileno(), self.server.ready)
+        self.listen_watch = early.FdWatch(self.server.listener.fileno(), self.server.accept_pending)
         self.addCleanup(self.cleanup)
 
     def cleanup(self):
@@ -100,6 +104,62 @@ class RunLoopControlTests(unittest.TestCase):
         self.assertEqual(self.hooks.closing, self.hooks.opened)
         self.assertIsNone(self.hooks.client_watch)
 
+    def test_a_message_waiting_at_accept_and_a_later_one_are_both_handled(self):
+        """The 1.4.0 failure: the first message was handled, the next never was."""
+        client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        client.settimeout(1)
+        client.connect(str(self.path))
+        self.addCleanup(client.close)
+        request_id = str(uuid.uuid4())
+        client.sendall(self.frame("ARM", request_id))           # already waiting when accepted
+        self.assertTrue(run_until(lambda: self.messages == ["ARM"]))
+        self.assertEqual(json.loads(client.recv(4096))["status"], "ok")
+        run_until(lambda: False, 0.3)                            # a run-loop pass in between
+        client.sendall(self.frame("DONE", request_id))
+        self.assertTrue(run_until(lambda: self.messages == ["ARM", "DONE"]),
+                        "the second message on the connection was never read")
+
+    def test_back_to_back_connections_are_each_served(self):
+        """Each relay request is its own connection: none may be refused as busy."""
+        for round_ in range(4):
+            client = self.connect()
+            request_id = str(uuid.uuid4())
+            client.sendall(self.frame("ARM", request_id))
+            self.assertTrue(run_until(lambda: len(self.messages) == 2 * round_ + 1), f"ARM {round_}")
+            client.recv(4096)
+            client.sendall(self.frame("DONE", request_id))
+            self.assertTrue(run_until(lambda: len(self.messages) == 2 * round_ + 2), f"DONE {round_}")
+            self.assertTrue(run_until(lambda: self.server.client is None))
+            client.close()
+        self.assertEqual(self.messages, ["ARM", "DONE"] * 4)
+
+    def test_a_second_connection_while_one_is_open_is_refused_and_the_first_still_works(self):
+        first = self.connect()
+        request_id = str(uuid.uuid4())
+        first.sendall(self.frame("ARM", request_id))
+        self.assertTrue(run_until(lambda: self.messages == ["ARM"]))
+        first.recv(4096)
+        second = self.connect()
+        run_until(lambda: False, 0.3)            # let the listener's watch take and refuse it
+        second.settimeout(0.5)
+        try:
+            refused = second.recv(1) == b""
+        except ConnectionResetError:
+            refused = True
+        self.assertTrue(refused, "a second connection was accepted while one was open")
+        first.sendall(self.frame("DONE", request_id))
+        self.assertTrue(run_until(lambda: self.messages == ["ARM", "DONE"]))
+
+    def test_the_client_watch_is_not_called_in_a_loop(self):
+        """Re-arming a CFFileDescriptor at the wrong moment can make it fire
+        endlessly with nothing to read; a quiet connection must stay quiet."""
+        client = self.connect()
+        client.sendall(self.frame("ARM"))
+        self.assertTrue(run_until(lambda: self.messages == ["ARM"]))
+        before = self.hooks.client_callbacks
+        run_until(lambda: False, 0.5)
+        self.assertLessEqual(self.hooks.client_callbacks - before, 1)
+
     def test_idle_run_loop_does_no_work(self):
         calls = []
         real = self.server.poll
@@ -113,7 +173,7 @@ class RunLoopControlTests(unittest.TestCase):
         self.connect()
         self.assertTrue(run_until(lambda: self.hooks.opened))
         with patch.object(early.time, "monotonic", return_value=time.monotonic() + early.HOLD_LIMIT_S + 1):
-            self.server.ready()
+            self.server.expire_hold()
         self.assertEqual(self.drops, [True])
         self.assertIsNone(self.hooks.client_watch)
 
