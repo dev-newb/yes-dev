@@ -123,8 +123,12 @@ def relay_child():
             except (ValueError, TypeError, OSError):
                 decoded, gate = {}, {}
             waiting = self.waiting_sessions.get(decoded.get('sessionId'), {})
+            target = waiting.get('target') or {}
+            eligible_target = (not gate.get('active_tab_only') or (
+                target.get('type') == 'tab' and target.get('embedderData', {}).get('tabActive') is True))
             if (decoded.get('method') == 'Runtime.runIfWaitingForDebugger'
-                and self.label in gate.get('clients', []) and waiting.get('t', 0) >= gate.get('after', float('inf'))):
+                and eligible_target and self.label in gate.get('clients', [])
+                and waiting.get('t', 0) >= gate.get('after', float('inf'))):
                 self.record('resume_delivery_delayed', message)
                 async def deliver():
                     while (evidence_dir / 'resume-gate.json').exists():
@@ -212,7 +216,8 @@ class LaunchRun:
         self.sampling = True
         snapshots = self.out / 'driver-source'
         snapshots.mkdir()
-        for name in ('record_cdp_traffic.py', 'recon_cdp_live.py', 'traffic_puppeteer_client.mjs'):
+        for name in ('record_cdp_traffic.py', 'recon_cdp_live.py', 'traffic_puppeteer_client.mjs',
+                     'native_input_checks.py'):
             path = Path(__file__).with_name(name)
             if path.exists():
                 (snapshots / name).write_bytes(path.read_bytes())
