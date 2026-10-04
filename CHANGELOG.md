@@ -28,8 +28,13 @@ the system-wide Accessibility query answered "cannot complete" on this Mac.
 
 Fourteen new tests cover the launch decision, with stub probes and a fake
 clock, and opening the held connection with no client against the strict fake
-Chrome. Each rule, removed on its own, fails a test. Not yet run against a real
-Chrome launch.
+Chrome. Each rule, removed on its own, fails a test. Live on Chrome 154: a
+foreground launch was approved once with no app switch and then served a raw
+client and Playwright without another prompt; a background launch and a Chrome
+already running were left alone until the first client; a restart was primed
+again; seven seconds of real typing in the address bar held the prompt off
+until 2.6 seconds after the last key, with nothing typed into the sheet; and a
+cancelled launch prompt was not repeated.
 
 ## 1.4.0 - 2026-10-03
 
