@@ -21,6 +21,7 @@ import json
 import logging
 from pathlib import Path
 import re
+import time
 
 from websockets.asyncio.client import connect
 from websockets.asyncio.server import serve
@@ -36,6 +37,8 @@ HOLD_RESET_ROUNDS = 3      # sessions can attach while the first round runs
 # detached itself, a context its client disposed. Any other failed reset leaves
 # state behind that the next client would inherit, so the connection is retired.
 IDEMPOTENT_CLEANUP = ("Target.detachFromTarget", "Target.disposeBrowserContext")
+PRIME_IDLE_S = 2.0      # no keyboard or mouse input this long before a launch-time prompt
+PRIME_WINDOW_S = 60.0   # after Chrome starts, keep waiting for a good moment this long
 _CLOSE_CODES = (1000, 1001, 1008, 1009, 1011, 1012, 1013)
 
 
@@ -349,17 +352,32 @@ class HeldConnection:
                 await asyncio.wait_for(self.reset_done.wait(), HOLD_RESET_TIMEOUT)
             except asyncio.TimeoutError:
                 return False
-            endpoint = read_endpoint(self.relay.profile)
-            if not self.open or endpoint != self.endpoint:
-                await self.close_upstream()
-                upstream, endpoint = await self.relay.establish_endpoint()
-                self.upstream, self.endpoint = upstream, endpoint
-                self.reader = asyncio.create_task(self.read_chrome(upstream))
-                self.relay.status(held=True)
-                LOGGER.info("Holding a Chrome connection open for later clients")
+            await self._open_if_needed()
             self.generation += 1
             self.owner = downstream
             return True
+
+    async def _open_if_needed(self):
+        """With the lock held: make sure the connection is open to the current Chrome."""
+        endpoint = read_endpoint(self.relay.profile)
+        if self.open and endpoint == self.endpoint:
+            return False
+        await self.close_upstream()
+        upstream, endpoint = await self.relay.establish_endpoint()
+        self.upstream, self.endpoint = upstream, endpoint
+        self.reader = asyncio.create_task(self.read_chrome(upstream))
+        self.relay.status(held=True)
+        LOGGER.info("Holding a Chrome connection open for later clients")
+        return True
+
+    async def prime(self):
+        """Open the held connection with no client waiting. False if there was nothing to do."""
+        if self.busy() or not self.reset_done.is_set():
+            return False
+        async with self.lock:
+            if self.owner is not None:
+                return False
+            return await self._open_if_needed()
 
     async def release(self, downstream):
         if self.owner is not downstream:
@@ -556,6 +574,76 @@ class HeldConnection:
         if owner is not None:
             await owner.close(1001, "Relay stopping")
         await self.close_upstream()
+
+
+class LaunchPrimer:
+    """Open the held connection when Chrome starts, while you are already in it.
+
+    Chrome activates its window for every consent prompt. Just after you launch
+    it, Chrome is in front anyway, so a prompt then takes nothing from you, and
+    with the connection already held no agent triggers one later. The catch is
+    typing: the sheet takes the keyboard, and a Space presses Cancel. So the
+    held connection is opened at launch only:
+
+      - for a Chrome endpoint that appeared while the relay was running, so a
+        Chrome already open when the relay starts is never prompted out of turn;
+      - while that same Chrome is the frontmost app and has a focused window;
+      - after PRIME_IDLE_S without keyboard or mouse input;
+      - within PRIME_WINDOW_S of the launch, and at most once per launch, so a
+        prompt you cancel is never repeated.
+
+    Otherwise the first client opens it, as without priming. The probes are
+    passed in so the decision can be tested without a Mac: endpoint() returns
+    the current Endpoint or None, owner_pid(endpoint) the pid listening on it,
+    front_pid() the active app's pid if its window is on top (both async), and
+    idle_seconds() the time since the last input.
+    """
+
+    def __init__(self, held, endpoint, owner_pid, front_pid, idle_seconds, clock=time.monotonic):
+        self.held = held
+        self.endpoint = endpoint
+        self.owner_pid = owner_pid
+        self.front_pid = front_pid
+        self.idle_seconds = idle_seconds
+        self.clock = clock
+        self.known = endpoint()      # whatever Chrome is running now is not a launch
+        self.pending_until = None
+
+    async def tick(self):
+        """One look. Returns what it decided, for the log and the tests."""
+        current = self.endpoint()
+        now = self.clock()
+        if current is not None and current != self.known:
+            self.known = current
+            self.pending_until = now + PRIME_WINDOW_S
+            LOGGER.info("Chrome started; opening the held connection when Chrome is in front and idle")
+        if self.pending_until is None:
+            return "idle"
+        if current is None:
+            self.pending_until = None
+            return "chrome-gone"
+        if now > self.pending_until:
+            self.pending_until = None
+            LOGGER.info("Chrome was not in front and idle within %ss of starting; "
+                        "the first client will open the connection", int(PRIME_WINDOW_S))
+            return "gave-up"
+        if self.held.open and self.held.endpoint == current:
+            self.pending_until = None
+            return "already-open"
+        if self.held.busy():
+            return "busy"
+        if self.idle_seconds() < PRIME_IDLE_S:
+            return "input"
+        owner = await self.owner_pid(current)
+        if owner is None or await self.front_pid() != owner:
+            return "not-in-front"
+        self.pending_until = None          # one attempt per launch, whatever happens
+        try:
+            opened = await self.held.prime()
+        except Exception as exc:
+            LOGGER.warning("Could not open the held connection at launch: %s", exc)
+            return "failed"
+        return "primed" if opened else "already-open"
 
 
 class NoFocus:

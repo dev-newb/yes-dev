@@ -132,6 +132,9 @@ client that enabled discovery; everything else is session-scoped.
    against Chrome 154 with Playwright and Puppeteer on 2026-10-02, which found
    two bugs (auto-attach reset refused without `flatten`; `Browser.close` from a
    concurrent client) that are now fixed and pinned by tests.
+   *Connect at launch* (2026-10-03): the held connection opens when the user
+   starts Chrome and it is in front and idle, so the one prompt per launch
+   lands while the user is already in Chrome (`LaunchPrimer`).
 2. **Concurrent clients with ownership.** Id mapping, session routing, the
    ownership rule for auto-attach, discovery fan-out, per-client cleanup.
    The bulk of the work. Needs a test matrix, below.

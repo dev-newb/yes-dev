@@ -215,6 +215,12 @@ clients, malformed messages, a client leaving while Chrome is being asked,
 status and shutdown. The relay before the live run fails six of them, and each
 fix undone on its own is caught.
 
+`tests/test_launch_primer.py` covers connect-at-launch: `prime()` against the
+same fake Chrome, and every branch of the launch decision with stub probes and
+a fake clock (already-running Chrome, another app in front, no window yet,
+recent input, the one-minute window, one attempt per launch, a client getting
+there first, Chrome quitting, a restart).
+
 `tests/mac/verify_hold_live.py` (with `hold_puppeteer_probe.mjs`) is the live
 driver against real Chrome and real Playwright and Puppeteer. It needs a
 disposable consent-mode Chrome and its verified pid, and two of its modes need
