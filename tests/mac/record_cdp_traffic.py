@@ -321,7 +321,8 @@ class LaunchRun:
         self.event('launch_requested', background=background)
         background_flag = '-gjna' if self.args.hidden_background else '-gna'
         subprocess.run(['open', background_flag if background else '-na', 'Google Chrome', '--args',
-                        '--user-data-dir=' + str(self.profile), '--no-first-run', 'about:blank'], check=True)
+                        '--user-data-dir=' + str(self.profile), '--no-first-run',
+                        getattr(self.args, 'launch_url', 'about:blank')], check=True)
         self.pid = await self.wait_for(self.find_browser)
         self.event('endpoint_available', pid=self.pid, hidden_background=background and self.args.hidden_background)
         if not background:
@@ -433,12 +434,20 @@ class LaunchRun:
                 print('LAUNCH_COUNTDOWN 3 seconds', flush=True)
                 await asyncio.sleep(3)
                 await self.launch()
-                await self.primed()
+                await self.wait_for(lambda: self.status().get('held'), 80)
+                await asyncio.sleep(1)
+                self.event('held_verified', status=self.status(), approvals=self.approvals())
+                assert self.approvals() == 1
+                # Preserve the omnibox while the operator/observer verifies
+                # typing. Client-created pages would otherwise steal its focus.
                 answer = await self.ui('confirm_typing_and_launch_prompt_observations',
                     instructions='Confirm actual observations after the typing trial. Return completed, typed_continuously_for_five_seconds, prompt_only_after_idle, address_bar_text_preserved, and no_text_entered_sheet as true only if each was observed. Readiness alone is not a pass.')
                 assert all(answer.get(key) is True for key in (
                     'typed_continuously_for_five_seconds', 'prompt_only_after_idle',
                     'address_bar_text_preserved', 'no_text_entered_sheet')), answer
+                await self.raw_work('raw_after_typing')
+                await self.pw_work()
+                assert self.approvals() == 1
             elif name == 'A6':
                 await self.start_tray()
                 (self.case_out / 'inhibit-approval').touch()
@@ -520,6 +529,7 @@ def main():
     parser.add_argument('--ui-timeout', type=float, default=900)
     parser.add_argument('--start-delay', type=float, default=0)
     parser.add_argument('--wait-idle', type=float, default=0)
+    parser.add_argument('--launch-url', default='about:blank', help='Optional local visual fixture for identifying the disposable test window')
     parser.add_argument('--hidden-background', action='store_true', help='Use open -j as well as -g because Chrome may self-activate during startup')
     parser.add_argument('--restore-background-app', action='store_true', help='Return to TextEdit immediately after the endpoint appears if Chrome self-activates despite open -g')
     args = parser.parse_args()
