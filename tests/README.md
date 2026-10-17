@@ -10,6 +10,16 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File tests/run-windows-tests.
 Use `-Python` to select a Python executable and `-ResultDirectory` to select a
 new, empty result directory. Results include JSON reports and the native test log.
 
+To check all three Speed menu choices with the Windows app dependencies installed:
+
+```powershell
+python -m unittest discover -s tests -p test_speed_menu.py -v
+```
+
+This test calls the real pystray menu items and checks integer values, saved
+config, check marks, restart requests, and watcher arguments. It uses a temporary
+config and mocks process creation, so it does not start a tray or watcher.
+
 - `watcher-regression.ps1` extracts the original functions and one bounded loop
   body, with desktop access, processes and logging replaced by test data.
 - Argument probes run the actual parameter and normalization code through

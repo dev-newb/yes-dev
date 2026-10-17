@@ -532,7 +532,7 @@ class YesDev:
                 for label, val in ARM_CHOICES
             ])),
             I("Speed", M(*[
-                I(label, lambda _, v=val: self.set_value("poll_ms", v, restart=True)(),
+                I(label, self.set_value("poll_ms", val, restart=True),
                   checked=lambda _, v=val: self.cfg["poll_ms"] == v, radio=True)
                 for label, val in POLL_CHOICES
             ])),
