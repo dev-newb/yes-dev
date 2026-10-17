@@ -5,6 +5,25 @@ measured - the numbers are from this repo's own runs, not estimates.
 
 ## Unreleased
 
+### Windows: speed selection and stalled approval recovery
+
+All three Speed menu choices now pass their integer interval to the watcher.
+Previously, pystray's menu-item argument replaced that value, which prevented
+config saves and made PowerShell exit repeatedly.
+
+The tray now starts a Win32 supervisor with up to four dialog-scoped workers.
+UI Automation calls, dismissal checks, and COM finalizers run in the workers.
+A worker that stops reporting progress is terminated after five seconds and
+its prompt is retried with the native legacy method first. A Windows job object
+terminates workers if the supervisor exits. Concurrent approval logs use a shared
+mutex, released before console output.
+
+Isolated Chrome and Edge tests cover all three speeds, English and Chinese,
+observe mode, a forced 30-second stall, and termination during a blocked call.
+The stall test requires other prompts to complete before recovery and requires
+the stalled prompt's connection to complete after retry. Tests use private
+desktops and fresh profiles; no active user browser is used.
+
 ### macOS: fast focus no longer stalls or refuses back-to-back connections
 
 1.4.0 broke fast focus for agents that connect in quick succession, and slowed

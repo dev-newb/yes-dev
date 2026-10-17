@@ -64,7 +64,12 @@ param(
     [int]$ParentPid = 0,
     # Restart rather than grow without bound. Nothing should reach this now, so
     # hitting it is a bug report, not routine maintenance - the tray restarts us.
-    [int]$MaxPrivateMB = 400
+    [int]$MaxPrivateMB = 400,
+    # Internal supervisor options. A worker can only inspect its assigned dialog.
+    [long]$WorkerHwnd = 0,
+    [int]$WorkerOwnerPid = 0,
+    [string]$ProgressPath = '',
+    [switch]$LegacyFirst
 )
 
 $ErrorActionPreference = 'Stop'
@@ -252,30 +257,48 @@ if (-not (Test-Path $logDir)) { New-Item -ItemType Directory -Path $logDir -Forc
 
 function Write-Log {
     param([string]$Message, [string]$Level = 'INFO', [switch]$RequireWrite)
-    $line = "{0} [{1}] {2}" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss.fff'), $Level, $Message
-    $bytes = [System.Text.Encoding]::UTF8.GetBytes($line + [Environment]::NewLine)
-    $written = $false
-    for ($attempt = 0; $attempt -lt 5; $attempt++) {
-        try {
-            # A reader can briefly prevent rotation. Keep appending and try the
-            # rotation again on the next record rather than dropping this event.
-            if ((Test-Path $LogPath) -and ((Get-Item $LogPath).Length -gt 1048576)) {
-                try { Move-Item -Path $LogPath -Destination "$LogPath.1" -Force -ErrorAction Stop }
-                catch { }
-            }
-            # Add-Content in Windows PowerShell can reject concurrent readers.
-            # Explicit sharing makes log tailing compatible with append/rotation.
-            $stream = [IO.File]::Open($LogPath, [IO.FileMode]::Append, [IO.FileAccess]::Write,
-                ([IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete))
-            try { $stream.Write($bytes, 0, $bytes.Length) }
-            finally { $stream.Dispose() }
-            $written = $true
-            break
-        } catch {
-            if ($attempt -lt 4) { Start-Sleep -Milliseconds 20 }
+    # Scoped workers share this log. Serialize rotation and append as one operation.
+    $hash = [Security.Cryptography.SHA256]::Create()
+    try { $logKey = [BitConverter]::ToString($hash.ComputeHash([Text.Encoding]::UTF8.GetBytes(
+        [IO.Path]::GetFullPath($LogPath).ToLowerInvariant()))).Replace('-', '') }
+    finally { $hash.Dispose() }
+    $logMutex = New-Object Threading.Mutex($false, ('Local\YesDevLog-' + $logKey))
+    $ownsLog = $false
+    try {
+        try { $ownsLog = $logMutex.WaitOne(1000) }
+        catch [Threading.AbandonedMutexException] { $ownsLog = $true }
+        if (-not $ownsLog) {
+            if ($RequireWrite) { throw 'Approval log lock timed out' }
+            return
         }
+        $line = "{0} [{1}] {2}" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss.fff'), $Level, $Message
+        $bytes = [System.Text.Encoding]::UTF8.GetBytes($line + [Environment]::NewLine)
+        $written = $false
+        for ($attempt = 0; $attempt -lt 5; $attempt++) {
+            try {
+                # A reader can briefly prevent rotation. Keep appending and try the
+                # rotation again on the next record rather than dropping this event.
+                if ((Test-Path $LogPath) -and ((Get-Item $LogPath).Length -gt 1048576)) {
+                    try { Move-Item -Path $LogPath -Destination "$LogPath.1" -Force -ErrorAction Stop }
+                    catch { }
+                }
+                # Add-Content in Windows PowerShell can reject concurrent readers.
+                # Explicit sharing makes log tailing compatible with append/rotation.
+                $stream = [IO.File]::Open($LogPath, [IO.FileMode]::Append, [IO.FileAccess]::Write,
+                    ([IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete))
+                try { $stream.Write($bytes, 0, $bytes.Length) }
+                finally { $stream.Dispose() }
+                $written = $true
+                break
+            } catch {
+                if ($attempt -lt 4) { Start-Sleep -Milliseconds 20 }
+            }
+        }
+    } finally {
+        if ($ownsLog) { $logMutex.ReleaseMutex() }
+        $logMutex.Dispose()
     }
-    # A broken console must not retry an event that is already in the file.
+    # Console output must not hold the shared file lock or duplicate a saved event.
     if ($written) { try { Write-Host $line } catch { }; return }
     try { Write-Host ("{0} [WARN] log write failed: {1}" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss.fff'), $LogPath) } catch { }
     if ($RequireWrite) { throw 'Approval event could not be persisted' }
@@ -294,6 +317,13 @@ function Invoke-LegacyElement {
 
 function Invoke-Element {
     param($Element, [IntPtr]$DialogHwnd)
+    if ($LegacyFirst) {
+        try {
+            if (Invoke-LegacyElement -Element $Element -DialogHwnd $DialogHwnd) {
+                return 'LegacyDoDefaultAction'
+            }
+        } catch { Write-Log "  legacy-first attempt failed: $($_.Exception.Message)" 'WARN' }
+    }
     try {
         $Element.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
         return 'InvokePattern'
@@ -314,6 +344,8 @@ function Find-DialogWindows {
     # One transition into native code per sweep; the enumeration happens there.
     # Only a handful of windows carry this class, so few titles are ever read.
     foreach ($h in [YesDevWin]::VisibleOfClass($WindowClass)) {
+        if ($WorkerHwnd -gt 0 -and ($h.ToInt64() -ne $WorkerHwnd -or
+            [int][YesDevWin]::Pid($h) -ne $WorkerOwnerPid)) { continue }
         if ([YesDevWin]::Title($h) -match $DialogPattern) { [void]$hits.Add($h) }
     }
     return ,$hits
@@ -398,10 +430,14 @@ function Complete-PendingApprovals {
 }
 
 # One engine is enough; a second would race the first onto the same dialog.
-$mutex = New-Object System.Threading.Mutex($false, 'Global\YesDevEngine')
-if (-not $mutex.WaitOne(0)) {
-    Write-Log "another engine already holds the lock - exiting (pid=$PID)" 'WARN'
-    exit 0
+if ($WorkerHwnd -le 0) {
+    $mutex = New-Object System.Threading.Mutex($false, 'Global\YesDevEngine')
+    if (-not $mutex.WaitOne(0)) {
+        Write-Log "another engine already holds the lock - exiting (pid=$PID)" 'WARN'
+        exit 0
+    }
+} elseif ($WorkerOwnerPid -le 0 -or $ParentPid -le 0) {
+    throw 'A scoped worker requires an owner PID and supervisor PID'
 }
 
 Write-Log "engine started (observe=$($Observe.IsPresent), interval=${IntervalMs}ms, browsers=$($BrowserProcess -join '+'), pid=$PID)"
@@ -419,6 +455,7 @@ if ($ParentPid -gt 0) {
     try { $parent = [System.Diagnostics.Process]::GetProcessById($ParentPid) }
     catch { Write-Log "parent pid $ParentPid is already gone - exiting" 'WARN'; exit 0 }
 }
+if ($ProgressPath) { [IO.File]::WriteAllText($ProgressPath, 'ready') }
 
 while ($true) {
     try {
@@ -435,7 +472,13 @@ while ($true) {
             $approved += $completed
             Write-Log "  total approved this session: $approved"
         }
+        if ($WorkerHwnd -gt 0 -and [int][YesDevWin]::Pid([IntPtr]$WorkerHwnd) -ne $WorkerOwnerPid) {
+            exit 0
+        }
         $hwnds = Find-DialogWindows
+        if ($WorkerHwnd -gt 0 -and $hwnds.Count -eq 0 -and $pendingApprovals.Count -eq 0) {
+            exit 0
+        }
 
         if ($hwnds.Count -gt 0) {
             $usedAutomation = $true
@@ -514,5 +557,8 @@ while ($true) {
     } catch {
         Write-Log "loop error: $($_.Exception.Message)" 'ERROR'
     }
+    # A missing heartbeat means *any* stage is blocked, including element lookup,
+    # Invoke, dismissal checks, and COM finalizers. The supervisor owns recovery.
+    if ($ProgressPath) { [IO.File]::WriteAllText($ProgressPath, 'sweep') }
     Start-Sleep -Milliseconds $IntervalMs
 }

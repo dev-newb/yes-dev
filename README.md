@@ -317,9 +317,17 @@ unrecognized settings are preserved.
 
 ### Finding the dialog on Windows
 
-`watcher.ps1` first enumerates visible top-level `Chrome_WidgetWin_1` windows.
-It matches the consent title and browser process before it reads any UI
-Automation elements. The idle path does not scan the browser's accessibility tree.
+The tray starts `watcher_supervisor.py`, which enumerates visible top-level
+`Chrome_WidgetWin_1` windows and verifies each consent title and browser owner.
+The idle path uses Win32 calls and does not scan the accessibility tree.
+
+The supervisor runs at most four `watcher.ps1` workers. Each worker is restricted
+to one window handle and browser PID. A worker reports progress after each sweep;
+if no sweep completes for five seconds, the supervisor terminates that worker
+and retries the prompt with the native legacy method first. Startup has a separate
+ten-second limit. Other dialogs can proceed while a provider call is blocked.
+Stopping the supervisor also stops its workers through a Windows job object.
+Supervisor startup and recovery records go to `%LOCALAPPDATA%\YesDev\supervisor.log`.
 
 The engine invokes the matching Allow button through `InvokePattern`. If that
 fails, it uses the native `LegacyIAccessible` COM interface for the same button
@@ -336,7 +344,8 @@ The counter measures dialog dismissal after an approval action. It cannot inspec
 another client's protocol session. The isolated browser tests verify successful
 CDP connections separately, and require one counter event per tested connection.
 
-The log writer permits concurrent reading and uses bounded retries for short
+The log writer serializes worker appends and rotation with a named mutex. It
+releases that lock before console output. It permits concurrent reading and uses bounded retries for short
 file locks. A confirmation stays pending until its ACTION record is saved. A
 reader that blocks log rotation does not cause the current event to be dropped;
 the engine appends it and retries rotation on a later write.
@@ -516,6 +525,7 @@ in the data directory.
 | `yes_dev_mac.py` | macOS menu-bar UI, engine supervisor, config |
 | `settings_mac.py`, `settings_model.py` | Native macOS settings window, validation, atomic persistence |
 | `watcher.ps1` | The UI Automation engine. Runs standalone too. |
+| `watcher_supervisor.py` | Windows prompt discovery, scoped workers, and stall recovery. Used by the tray. |
 | `watcher_mac.py` | The Accessibility engine. Runs standalone too. |
 | `platform_mac.py` | macOS paths, single instance, permission check, autostart |
 | `puffs.py` | The cloud overlay and the shared artwork. Its own process. |

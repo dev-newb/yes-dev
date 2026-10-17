@@ -1,6 +1,6 @@
 """Yes, Dev - Windows tray control for the Chrome remote-debugging auto-approver.
 
-The PowerShell engine (watcher.ps1) does the UI Automation work. This owns its
+The supervisor runs scoped PowerShell workers for UI Automation. This owns their
 lifetime, exposes the options in a tray menu, and tails the log so approvals are
 visible and a runaway burst can be caught.
 
@@ -32,6 +32,7 @@ BASE = Path(__file__).resolve().parent
 if str(BASE) not in sys.path:
     sys.path.insert(0, str(BASE))   # so `import puffs` works however we were launched
 WATCHER = BASE / "watcher.ps1"
+SUPERVISOR = BASE / "watcher_supervisor.py"
 DATA_DIR = Path(os.environ.get("LOCALAPPDATA", Path.home())) / "YesDev"
 CONFIG_PATH = DATA_DIR / "config.json"
 LOG_PATH = DATA_DIR / f"{APP_SLUG}.log"
@@ -169,8 +170,7 @@ class YesDev:
             return
         browsers = "chrome,msedge" if self.cfg["include_edge"] else "chrome"
         args = [
-            "powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
-            "-WindowStyle", "Hidden", "-File", str(WATCHER),
+            sys.executable, str(SUPERVISOR),
             "-IntervalMs", str(self.cfg["poll_ms"]),
             "-LogPath", str(LOG_PATH),
             "-BrowserProcess", browsers,

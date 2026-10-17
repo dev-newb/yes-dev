@@ -20,6 +20,28 @@ This test calls the real pystray menu items and checks integer values, saved
 config, check marks, restart requests, and watcher arguments. It uses a temporary
 config and mocks process creation, so it does not start a tray or watcher.
 
+The main Windows test runner also runs the supervisor scheduler tests and a
+four-writer log test. To run just the scheduler tests:
+
+```powershell
+python -m unittest discover -s tests -p test_watcher_supervisor.py -v
+```
+
+To test the complete supervisor and real Chrome/Edge consent flow:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File tests/run-supervisor-browser-tests.ps1 -Python python
+```
+
+This uses separate private desktops and fresh profiles. It tests all three
+speeds, Chinese dialogs, eight simultaneous connections, observe mode, and
+supervisor termination while a worker is blocked. A test-only copy injects a
+30-second stall after an Allow button has been identified. Healthy prompts must
+finish before the stall timeout, and the blocked prompt must complete after
+worker recovery. Each successful connection must answer `Browser.getVersion`
+and produce exactly one persisted ACTION event. Only test-owned processes are
+stopped. These are short tests, not an unattended soak.
+
 - `watcher-regression.ps1` extracts the original functions and one bounded loop
   body, with desktop access, processes and logging replaced by test data.
 - Argument probes run the actual parameter and normalization code through

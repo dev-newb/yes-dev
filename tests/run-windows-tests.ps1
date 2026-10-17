@@ -11,6 +11,12 @@ $repo=Split-Path -Parent $PSScriptRoot
 $source=Join-Path $repo 'watcher.ps1'
 $ps="$env:WINDIR\System32\WindowsPowerShell\v1.0\powershell.exe"
 $probe=Join-Path $ResultDirectory 'argv-probe.ps1'
+& $Python -m unittest discover -s $PSScriptRoot -p test_speed_menu.py -v
+if($LASTEXITCODE) { throw 'Speed menu tests failed' }
+& $Python -m unittest discover -s $PSScriptRoot -p test_watcher_supervisor.py -v
+if($LASTEXITCODE) { throw 'Supervisor scheduler tests failed' }
+& $ps -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'concurrent-worker-log.ps1') -SourcePath $source -ResultDirectory (Join-Path $ResultDirectory 'concurrent-log')
+if($LASTEXITCODE) { throw 'Concurrent worker log tests failed' }
 & $ps -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'watcher-regression.ps1') -SourcePath $source -Variant fixed -OutputPath (Join-Path $ResultDirectory 'regression.json') -ProbePath $probe
 if($LASTEXITCODE) { throw 'Watcher regression tests failed' }
 $argvTests=@()

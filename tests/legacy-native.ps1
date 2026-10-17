@@ -256,6 +256,15 @@ public static class Provider {
         Expect (Complete-PendingApprovals) 1
         [void][DesktopName]::ShowWindow($dialog,4)
     }
+    Check 'Scoped worker finds only its assigned HWND and owner' {
+        $WorkerHwnd = $dialog.ToInt64(); $WorkerOwnerPid = $providerPid
+        Expect (Find-DialogWindows).Count 1
+        $WorkerOwnerPid++
+        Expect (Find-DialogWindows).Count 0
+        $WorkerOwnerPid = $providerPid; $WorkerHwnd++
+        Expect (Find-DialogWindows).Count 0
+        $WorkerHwnd = 0; $WorkerOwnerPid = 0
+    }
     Check 'Observe mode on real dialog performs no action' {
         $Observe=$true
         Expect (Approve-Dialog -Hwnd $dialog) 'observe'
