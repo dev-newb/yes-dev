@@ -137,6 +137,30 @@ pythonw yes_dev.pyw
 Right-click the tray icon and tick **Start at login** to make it permanent (it
 drops a shortcut in your Startup folder - no scheduled task, no admin rights).
 
+Every Windows entry point checks its launch context before loading the tray.
+A launch from Codex, a terminal, or another tool is handed to the desktop
+Explorer process. The child verifies its desktop parent and job limits before
+it starts. A failed verification is logged; it does not leave an attached tray
+running. This also applies to existing Start Menu and Startup shortcuts.
+
+Startup and exit records are stored under `%LOCALAPPDATA%\YesDev\lifecycle`.
+Use **Open startup/exit records** in the tray menu. `active.json` points to the
+latest session that reached the tray-ready state. Each session has:
+
+- `events.jsonl`: startup details, requested exit reasons, exceptions, engine
+  stops/restarts, and the observed process exit code.
+- `state.json`: process identity, last heartbeat, startup/exit times, and reason.
+- `stderr.log` and `native-fault.log`: Python errors and native fault traces.
+
+If the runtime module itself cannot load, `%LOCALAPPDATA%\YesDev\bootstrap-error.log`
+records that startup failure before any tray dependencies are imported.
+
+A separate exit watcher records the process code when the tray is forcibly
+stopped. If the whole process tree or Windows stops both processes, the next
+startup marks the missing exit record as unknown. An exit code alone cannot
+identify which external program stopped the app. No system-wide audit setting
+is changed.
+
 ### Updating on Windows
 
 Exit Yes, Dev from its tray menu before replacing its files. For a Git checkout
@@ -526,6 +550,7 @@ in the data directory.
 | `settings_mac.py`, `settings_model.py` | Native macOS settings window, validation, atomic persistence |
 | `watcher.ps1` | The UI Automation engine. Runs standalone too. |
 | `watcher_supervisor.py` | Windows prompt discovery, scoped workers, and stall recovery. Used by the tray. |
+| `windows_runtime.py` | Desktop launch broker, lifecycle records, and the independent tray exit watcher. |
 | `watcher_mac.py` | The Accessibility engine. Runs standalone too. |
 | `platform_mac.py` | macOS paths, single instance, permission check, autostart |
 | `puffs.py` | The cloud overlay and the shared artwork. Its own process. |

@@ -204,6 +204,7 @@ def main():
     parent = None
     job = None
     supervisor = None
+    exit_reason = "startup_failed"
     browsers = {name.strip().lower() for name in args.BrowserProcess.split(",") if name.strip()}
 
     def log(message):
@@ -219,6 +220,7 @@ def main():
         if args.ParentPid:
             parent = windows.kernel.OpenProcess(0x100000, False, args.ParentPid)
             if not parent:
+                exit_reason = "tray_pid_unavailable"
                 return 0
         job = WorkerJob(windows.kernel)
         powershell = str(Path(os.environ["WINDIR"]) / "System32/WindowsPowerShell/v1.0/powershell.exe")
@@ -246,12 +248,15 @@ def main():
                 while not parent or windows.kernel.WaitForSingleObject(parent, 0) == 258:
                     supervisor.tick(windows.dialogs(browsers), time.monotonic())
                     time.sleep(args.IntervalMs / 1000)
+                exit_reason = "tray_process_exited"
             finally:
                 supervisor.close()
     except Exception as error:
+        exit_reason = "exception"
         log(f"supervisor failed: {error!r}")
         raise
     finally:
+        log(f"supervisor exiting pid={os.getpid()} reason={exit_reason}")
         if job:
             job.close()
         if parent:

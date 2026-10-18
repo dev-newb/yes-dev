@@ -15,6 +15,8 @@ $probe=Join-Path $ResultDirectory 'argv-probe.ps1'
 if($LASTEXITCODE) { throw 'Speed menu tests failed' }
 & $Python -m unittest discover -s $PSScriptRoot -p test_watcher_supervisor.py -v
 if($LASTEXITCODE) { throw 'Supervisor scheduler tests failed' }
+& $Python -m unittest discover -s $PSScriptRoot -p test_windows_runtime.py -v
+if($LASTEXITCODE) { throw 'Independent launch and lifecycle tests failed' }
 & $ps -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'concurrent-worker-log.ps1') -SourcePath $source -ResultDirectory (Join-Path $ResultDirectory 'concurrent-log')
 if($LASTEXITCODE) { throw 'Concurrent worker log tests failed' }
 & $ps -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'watcher-regression.ps1') -SourcePath $source -Variant fixed -OutputPath (Join-Path $ResultDirectory 'regression.json') -ProbePath $probe

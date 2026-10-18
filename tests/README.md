@@ -27,6 +27,19 @@ four-writer log test. To run just the scheduler tests:
 python -m unittest discover -s tests -p test_watcher_supervisor.py -v
 ```
 
+The runner also tests independent startup and lifecycle records:
+
+```powershell
+python -m unittest discover -s tests -p test_windows_runtime.py -v
+```
+
+These tests use small no-UI Python fixtures with private diagnostic directories.
+They ask the real desktop Explorer broker to launch the fixtures. Closing an
+owned kill-on-close job must stop the caller while the independent fixture
+continues to write heartbeats. Other cases check exceptions, forced termination,
+exit codes, stale-session records, and fake tray session-end messages. They do
+not open a browser, create an app tray icon, or send shutdown messages to Windows.
+
 To test the complete supervisor and real Chrome/Edge consent flow:
 
 ```powershell

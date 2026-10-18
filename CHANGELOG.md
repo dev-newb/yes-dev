@@ -5,6 +5,25 @@ measured - the numbers are from this repo's own runs, not estimates.
 
 ## Unreleased
 
+### Windows: independent startup and exit records
+
+The Windows entry point now asks the desktop Explorer process to start the tray
+when the caller is a tool or terminal. It verifies the child's desktop parent
+and job limits. A single process-breakaway flag is not used as proof that all
+outer jobs were left. Existing shortcuts use the same guarded entry point.
+
+Per-session lifecycle records include process and parent identity, job limits,
+startup readiness, heartbeats, exit requests, supervisor exits, exception
+tracebacks, and actual process exit codes. A separate exit watcher can record
+termination that bypasses Python cleanup. Native fault output is retained.
+The next startup marks a missing exit record as unknown if both processes were
+stopped. The tray has an **Open startup/exit records** item.
+
+No-UI process tests close a test caller's kill-on-close job and require the
+independent app to survive. Other tests cover import/main/thread exceptions,
+forced termination, cleanup bypass, normal exits, and simulated session messages.
+No user browser or OS shutdown is used for those tests.
+
 ### Windows: speed selection and stalled approval recovery
 
 All three Speed menu choices now pass their integer interval to the watcher.

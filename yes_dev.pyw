@@ -20,6 +20,22 @@ from collections import deque
 from datetime import datetime, timedelta
 from pathlib import Path
 
+# Run the launch guard before third-party imports so import failures are recorded.
+if __name__ == "__main__":
+    try:
+        from windows_runtime import run
+        raise SystemExit(run(Path(__file__)))
+    except Exception:
+        import traceback
+        try:
+            failure_dir = Path(os.environ.get("LOCALAPPDATA", Path.home())) / "YesDev"
+            failure_dir.mkdir(parents=True, exist_ok=True)
+            with (failure_dir / "bootstrap-error.log").open("a", encoding="utf-8") as stream:
+                stream.write(datetime.now().astimezone().isoformat() + "\n" + traceback.format_exc() + "\n")
+        except OSError:
+            pass
+        raise
+
 import pystray
 from PIL import Image, ImageDraw
 
@@ -159,11 +175,21 @@ class YesDev:
         self._log_identity = None
         self._lock = threading.Lock()
         self._puffs = None            # built on first use; Tk costs a thread
+        self.lifecycle = None
+        self._reported_engine_exit = None
 
     # ---------- engine lifetime ----------
 
     def engine_running(self) -> bool:
-        return self.proc is not None and self.proc.poll() is None
+        if self.proc is None:
+            return False
+        code = self.proc.poll()
+        if code is not None and self._reported_engine_exit != self.proc.pid:
+            self._reported_engine_exit = self.proc.pid
+            log(f"engine exited pid={self.proc.pid} code={code}; monitor will restart it when enabled")
+            if self.lifecycle:
+                self.lifecycle.event("engine_exit", pid=self.proc.pid, code=code, expected=False)
+        return code is None
 
     def start_engine(self) -> None:
         if self.engine_running():
@@ -188,6 +214,8 @@ class YesDev:
         self._log_pending = b""
         self.proc = subprocess.Popen(args, creationflags=CREATE_NO_WINDOW)
         log(f"engine started pid={self.proc.pid} log_pos={self._log_pos}")
+        if getattr(self, "lifecycle", None):
+            self.lifecycle.event("engine_started", pid=self.proc.pid)
 
         mins = int(self.cfg["arm_minutes"] or 0)
         self.disarm_at = datetime.now() + timedelta(minutes=mins) if mins else None
@@ -195,8 +223,12 @@ class YesDev:
 
     def stop_engine(self) -> None:
         if self.proc is not None and self.proc.poll() is None:
+            if self.lifecycle:
+                self.lifecycle.event("engine_stop_requested", pid=self.proc.pid)
             # Kill the tree: PowerShell may outlive a plain terminate().
             run_hidden(["taskkill", "/PID", str(self.proc.pid), "/T", "/F"])
+            if self.lifecycle:
+                self.lifecycle.event("engine_stopped", pid=self.proc.pid, code=self.proc.poll(), expected=True)
         self.proc = None
         self.disarm_at = None
 
@@ -509,6 +541,8 @@ class YesDev:
         return handler
 
     def quit(self) -> None:
+        if self.lifecycle:
+            self.lifecycle.request_exit("tray_quit")
         self.stop_engine()
         if self._puffs:
             self._puffs.shutdown()
@@ -561,6 +595,7 @@ class YesDev:
             )),
             M.SEPARATOR,
             I("Open log", self.open_path(LOG_PATH)),
+            I("Open startup/exit records", self.open_path(DATA_DIR / "lifecycle")),
             I("Open config", self.open_path(CONFIG_PATH)),
             I("Quit", lambda _: self.quit()),
         )
@@ -572,24 +607,64 @@ class YesDev:
             f"{APP_NAME} - starting", self.build_menu(),
         )
         threading.Thread(target=self.monitor, daemon=True).start()
-        self.icon.run()
+        if self.lifecycle:
+            handlers = self.icon._message_handlers
+            original_stop = handlers[0x040A]  # pystray WM_STOP
+
+            def stopped(wparam, lparam):
+                self.lifecycle.request_exit("tray_loop_stopped")
+                return original_stop(wparam, lparam)
+
+            def query_end(wparam, lparam):
+                self.lifecycle.event("windows_query_end_session", flags=lparam)
+                return 1
+
+            def end_session(wparam, lparam):
+                self.lifecycle.event("windows_end_session", ending=bool(wparam), flags=lparam)
+                if wparam:
+                    self.lifecycle.request_exit("windows_session_end")
+                    self.icon.stop()
+                return 0
+
+            handlers[0x040A] = stopped
+            handlers[0x0011] = query_end
+            handlers[0x0016] = end_session
+
+            def setup(icon):
+                icon.visible = True
+                self.lifecycle.ready()
+
+            self.icon.run(setup=setup)
+        else:
+            self.icon.run()
 
 
-def main() -> int:
+def main(lifecycle=None) -> int:
     # One tray instance; a second would fight the first over the engine.
-    handle = ctypes.windll.kernel32.CreateMutexW(None, False, "Global\\YesDevTray")
-    if ctypes.windll.kernel32.GetLastError() == 183:  # ERROR_ALREADY_EXISTS
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    from ctypes import wintypes
+    kernel.CreateMutexW.argtypes = [ctypes.c_void_p, wintypes.BOOL, wintypes.LPCWSTR]
+    kernel.CreateMutexW.restype = wintypes.HANDLE
+    kernel.ReleaseMutex.argtypes = [wintypes.HANDLE]
+    kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+    handle = kernel.CreateMutexW(None, True, "Global\\YesDevTray")
+    if not handle:
+        raise ctypes.WinError(ctypes.get_last_error())
+    if ctypes.get_last_error() == 183:  # ERROR_ALREADY_EXISTS
+        if lifecycle:
+            lifecycle.request_exit("duplicate_instance")
+        kernel.CloseHandle(handle)
         return 0
-    app = YesDev()
+    app = None
     try:
+        app = YesDev()
+        app.lifecycle = lifecycle
         app.run()
     finally:
-        app.stop_engine()
-        if app._puffs:
+        if app:
+            app.stop_engine()
+        if app and app._puffs:
             app._puffs.shutdown()
-        ctypes.windll.kernel32.ReleaseMutex(handle)
+        kernel.ReleaseMutex(handle)
+        kernel.CloseHandle(handle)
     return 0
-
-
-if __name__ == "__main__":
-    sys.exit(main())
