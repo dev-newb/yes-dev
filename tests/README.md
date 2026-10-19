@@ -57,6 +57,9 @@ stopped. These are short tests, not an unattended soak.
 
 - `watcher-regression.ps1` extracts the original functions and one bounded loop
   body, with desktop access, processes and logging replaced by test data.
+  Owner checks include Chrome and Edge restarts between adjacent sweeps, PID
+  reuse by another program, unavailable owners, warning recovery, and pending
+  approvals across a restart. These restart cases use simulated process data.
 - Argument probes run the actual parameter and normalization code through
   `powershell.exe -File`.
 - `tray-launch.py` extracts the real launch method and records process arguments.
