@@ -11,18 +11,21 @@ debugging endpoint. If you drive Chrome with more than one agent or automation
 client, those prompts stack up and each one blocks its client until a human
 clicks Allow. `Yes, Dev` sits in the tray and answers them.
 
-**Latest release: [v1.4.0 - one Chrome prompt per launch on macOS](https://github.com/dev-newb/yes-dev/releases/tag/v1.4.0).**
-[Download the source ZIP](https://github.com/dev-newb/yes-dev/archive/refs/tags/v1.4.0.zip)
-and follow the [Windows](#windows) or [macOS](#macos) install steps. This is a
-Python source release, not a standalone installer.
+**Latest release: [v1.5.0 - Windows portable app and approval recovery](https://github.com/dev-newb/yes-dev/releases/tag/v1.5.0).**
 
-On macOS this release adds **Keep one Chrome connection open**, an option under
-Fast focus that lends one approved connection to your agents in turn, so Chrome
-asks once per launch instead of once for every client. Helpers can no longer
-outlive the menu-bar app, the fast-focus helper no longer costs anything while
-idle, and approving a prompt no longer reorders your Chrome windows. It builds
-on v1.3.0, which added the native **Settings…** window, Fast focus itself, and
-the engine memory repair; Windows users have nothing new to install.
+[Download the Windows x64 ZIP](https://github.com/dev-newb/yes-dev/releases/download/v1.5.0/YesDev-1.5.0-windows-x64.zip),
+extract it fully, then open `YesDev.exe`. Python and the app dependencies are
+included. This is a portable app, not an installer; no system Python is needed.
+
+The Windows release fixes all three speed choices, keeps a blocked approval
+from stopping other prompts, starts independently of a tool such as Codex, and
+records startup and exit diagnostics. Chrome and Edge owners are checked by
+current PID. See the [changelog](CHANGELOG.md) for the included source changes.
+
+[Download the source ZIP](https://github.com/dev-newb/yes-dev/archive/refs/tags/v1.5.0.zip)
+for a Python installation or macOS. The portable binary is Windows-only. This
+release includes the previously merged macOS source fixes; no new macOS native
+validation was performed for this Windows package.
 
 Measured on Chrome 151: four parallel attaches went from ~35 seconds of waiting
 on a human to **2.4-4.4 seconds**, unattended.
@@ -109,7 +112,7 @@ profile can also use approval mode, as the isolated tests do.
 
 ## Install
 
-Download the [v1.4.0 source ZIP](https://github.com/dev-newb/yes-dev/archive/refs/tags/v1.4.0.zip)
+Download the [v1.5.0 source ZIP](https://github.com/dev-newb/yes-dev/archive/refs/tags/v1.5.0.zip)
 and extract it, or clone the current repository:
 
 ```bash
@@ -122,6 +125,15 @@ its markers install only what your platform needs, so `pip install -r
 requirements.txt` works either place.
 
 ### Windows
+
+For the ready-to-run package, use the Windows x64 ZIP linked above. Keep its
+`app` and `runtime` folders beside `YesDev.exe`. Windows 10/11 x64, the normal
+Explorer desktop, Windows PowerShell 5.1, and .NET Framework 4.x are required.
+The launcher is unsigned. The release also provides `SHA256SUMS.txt`, a file
+manifest, and third-party license notices. Run `YesDev.exe --check-runtime` to
+check the private runtime without starting the tray.
+
+To use the source instead:
 
 Requires Windows, Python 3.9+, and Windows PowerShell 5.1. Run these commands
 from the extracted or cloned project folder.
@@ -165,7 +177,7 @@ is changed.
 
 Exit Yes, Dev from its tray menu before replacing its files. For a Git checkout
 on `main`, run `git pull --ff-only` in the project folder. If you installed from
-a ZIP, replace the old source files with the extracted v1.2.1 files.
+a ZIP, replace the old source files with the extracted v1.5.0 source files.
 
 Run `python -m pip install -r requirements.txt`, then start `pythonw yes_dev.pyw`
 again. The configuration stays in `%LOCALAPPDATA%\YesDev\config.json`. If you
@@ -230,18 +242,18 @@ WebSocket handshake, so the connection waits until approval.
 | **Pause on burst** | Trip past 30 / 60 / 120 approvals a minute, or off. Then either **ask me first** (5s dialog: Stop, or Allow for one hour) or **stop silently** and re-arm after a minute. |
 | **Observe only** | Log the dialogs but don't click - useful for a first look. |
 | **Include Microsoft Edge** | Watch Edge windows too. |
-| **Settings…** *(macOS)* | A native window for approval, notifications, timing, login, diagnostic logging, and focus settings. Save applies validated changes; Cancel discards edits. |
-| **Focus behavior** *(macOS Settings → Focus & connection)* | Off, Quiet focus, or Fast focus through the local relay. Off by default; see below. |
+| **Settingsâ€¦** *(macOS)* | A native window for approval, notifications, timing, login, diagnostic logging, and focus settings. Save applies validated changes; Cancel discards edits. |
+| **Focus behavior** *(macOS Settings â†’ Focus & connection)* | Off, Quiet focus, or Fast focus through the local relay. Off by default; see below. |
 | **Open log / Open relay log** *(macOS)* | Approval and connection diagnostics. |
 | **Open log / Open config** *(Windows)* | The data directory for your platform (see [Files](#files)). |
 
-On macOS, the configuration controls in this table live in **Settings…**;
+On macOS, the configuration controls in this table live in **Settingsâ€¦**;
 the menu keeps the master switch, status, Accessibility, logs, and Quit. No JSON
 editing is needed. Settings are still stored internally in `config.json`.
 
 ### Fast focus through the local relay (macOS, experimental)
 
-In **Settings… → Focus & connection**, choose **Fast focus via local relay**,
+In **Settingsâ€¦ â†’ Focus & connection**, choose **Fast focus via local relay**,
 select Chrome's data folder, and Save. The data folder contains `Local State`
 and `DevToolsActivePort` (normally `~/Library/Application Support/Google/Chrome`),
 rather than its `Default` or `Profile 1` subfolder. Enable Remote Debugging in
@@ -571,7 +583,7 @@ Everything the app writes lives in one directory per platform:
 | Settings | `config.json` | `config.json` |
 | Approvals, from the engine | `yes-dev.log` | `yes-dev.log` |
 | Tray-side events and errors | `tray.log` | `tray.log` |
-| Relay connections / focus | — | `relay.log` / `relay-focus.log` |
+| Relay connections / focus | â€” | `relay.log` / `relay-focus.log` |
 
 Both logs roll over at 1MB, keeping one previous generation.
 
@@ -624,7 +636,7 @@ python3 watcher_mac.py --observe
   Chrome, but Chrome's own dialog code activates the browser window before it
   builds the sheet, so the frontmost app becomes Chrome the moment a client
   connects. Nothing outside Chrome can veto that. **Quiet focus** (in
-  Settings → Focus & connection, off by default) is a helper that
+  Settings â†’ Focus & connection, off by default) is a helper that
   watches app activations and hands focus straight back when Chrome has just
   come forward on its own with a consent sheet up, while the engine approves in
   the background. "On its own" means no mouse or keyboard input in the previous
