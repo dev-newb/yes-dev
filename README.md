@@ -255,9 +255,16 @@ restore; recent input permits the connection without returning focus.
 On its own, fast focus still creates one consent prompt per client connection.
 Tick **Keep one Chrome connection open** in the same tab to stop that: the
 relay keeps the first approved connection open and lends it to one client at a
-time, so Chrome asks once per launch. That removes the repeated prompts, not
-every reason Chrome comes forward: a tool that opens a page in the foreground
-still brings Chrome to the front, as it would over any connection.
+time, so Chrome asks once per launch. It also picks when: as soon as you open
+Chrome yourself and it is in front with your hands off the keyboard and mouse
+for two seconds, the relay asks for the connection then, so the one prompt
+lands while you are already in Chrome and no agent triggers it later. If Chrome
+starts in the background, or you are busy in it for the first minute, the first
+agent opens the connection instead, as before. A Chrome that was already
+running when Yes, Dev started is never prompted out of turn. All of this
+removes the repeated prompts, not every reason Chrome comes forward: a tool
+that opens a page in the foreground still brings Chrome to the front, as it
+would over any connection.
 
 Message ids are renumbered per client, so nothing in flight for a client that
 left reaches the next one. When a client leaves, the relay undoes what it

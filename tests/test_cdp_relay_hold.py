@@ -110,7 +110,9 @@ class FakeChrome:
         return [(m, p) for _, m, p in self.received[after:] if not m.startswith("Test.")]
 
 
-class HeldRelayTests(unittest.IsolatedAsyncioTestCase):
+class HeldRelayFixture(unittest.IsolatedAsyncioTestCase):
+    """The relay with hold on, a fake Chrome and client helpers. No tests here."""
+
     async def asyncSetUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
@@ -158,6 +160,8 @@ class HeldRelayTests(unittest.IsolatedAsyncioTestCase):
             await asyncio.sleep(.01)
         self.fail("Condition did not become true")
 
+
+class HeldRelayTests(HeldRelayFixture):
     async def test_sequential_clients_share_one_connection_and_one_prompt(self):
         for value in ("a", "b", "c"):
             ws = await self.client()

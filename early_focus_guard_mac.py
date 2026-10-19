@@ -84,9 +84,19 @@ class FdWatch:
 class ControlServer:
     """Small bounded protocol, serviced on the AppKit thread before ACK is sent.
 
-    poll() does one step of work and is what the tests drive. In the helper,
-    ready() is called when the listener or the client socket is readable, and
-    on the hold-limit timer, so nothing runs while nothing happens.
+    In the helper each socket is read only by its own run-loop watch: the
+    listener's watch calls accept_pending(), which never reads, and the
+    client's watch calls read_pending(), which never accepts. That rule is
+    load-bearing. A CFFileDescriptor that is armed while data is waiting
+    delivers its callback later; if the data has been read in the meantime by
+    someone else, CoreFoundation drops the callback, and since a watch is only
+    re-armed from its own callback, it never fires again. Accepting and reading
+    in one pass did exactly that in 1.4.0: the first message on a connection
+    was handled and every later one was not, until the next connection arrived
+    and was refused because the old one was still open.
+
+    poll() does one step of both, for the tests that drive the protocol
+    without a run loop.
     """
 
     def __init__(self, path, token, handler, disconnected, watch=None):
@@ -113,42 +123,57 @@ class ControlServer:
             self.buffer = b""
             self.disconnected()
 
-    def poll(self):
-        # Unauthenticated clients cannot hold the sole connection indefinitely.
+    def expire_hold(self):
+        """Unauthenticated clients cannot hold the sole connection indefinitely."""
         if self.client is not None and time.monotonic() - self.accepted_at > HOLD_LIMIT_S:
             self.drop()
+
+    def accept_pending(self):
+        """Take a waiting connection. Never reads it: the client's own watch does."""
+        self.expire_hold()
         try:
             client, _ = self.listener.accept()
         except BlockingIOError:
-            client = None
-        if client is not None:
-            if self.client is not None:
-                client.close()
-            else:
-                self.client = client
-                client.setblocking(False)
-                self.accepted_at = time.monotonic()
-                if self.watch is not None:
-                    self.watch.client_opened(client)
+            return
+        if self.client is not None:
+            client.close()
+            return
+        self.client = client
+        client.setblocking(False)
+        self.accepted_at = time.monotonic()
+        if self.watch is not None:
+            self.watch.client_opened(client)
+
+    def read_pending(self):
+        """Read the client once, then handle every whole line that has arrived."""
         if self.client is None:
             return
-        if b"\n" not in self.buffer:
-            try:
-                data = self.client.recv(MAX_MESSAGE + 1)
-            except BlockingIOError:
-                return
-            except OSError:
-                self.drop()
-                return
-            if not data:
-                self.drop()
-                return
-            self.buffer += data
-        if len(self.buffer) > MAX_MESSAGE:
+        try:
+            data = self.client.recv(MAX_MESSAGE + 1)
+        except BlockingIOError:
+            data = None
+        except OSError:
             self.drop()
             return
-        if b"\n" not in self.buffer:
+        if data == b"":
+            self.drop()
             return
+        if data:
+            self.buffer += data
+        while self.client is not None:
+            if len(self.buffer) > MAX_MESSAGE:
+                self.drop()
+                return
+            if b"\n" not in self.buffer:
+                return
+            self._handle_line()
+
+    def poll(self):
+        """One step of everything, for tests without a run loop."""
+        self.accept_pending()
+        self.read_pending()
+
+    def _handle_line(self):
         line, self.buffer = self.buffer.split(b"\n", 1)
         try:
             message = json.loads(line)
@@ -166,12 +191,6 @@ class ControlServer:
                 self.drop()
         except (ValueError, TypeError, OSError):
             self.drop()
-
-    def ready(self):
-        """Service everything that is waiting: an accept, a read, every whole line."""
-        self.poll()
-        while self.client is not None and b"\n" in self.buffer:
-            self.poll()
 
     def close(self):
         self.drop()
@@ -196,14 +215,18 @@ class EarlyGuard(normal.Guard):
 
     def attach(self, control):
         self.control = control
-        self.listen_watch = FdWatch(control.listener.fileno(), self.control_ready)
+        self.listen_watch = FdWatch(control.listener.fileno(), self.control_accept)
 
-    def control_ready(self):
-        self.control.ready()
+    def control_accept(self):
+        self.control.accept_pending()
+        self.sync_pending_timer()
+
+    def control_read(self):
+        self.control.read_pending()
         self.sync_pending_timer()
 
     def client_opened(self, sock):
-        self.client_watch = FdWatch(sock.fileno(), self.control_ready)
+        self.client_watch = FdWatch(sock.fileno(), self.control_read)
         self.hold_timer = NSTimer.scheduledTimerWithTimeInterval_target_selector_userInfo_repeats_(
             HOLD_LIMIT_S + 0.05, self.bridge, "holdLimit:", None, False)
 
@@ -319,7 +342,8 @@ class _EarlyFocusBridge(NSObject):
 
     def holdLimit_(self, _timer):
         self.guard.hold_timer = None
-        self.guard.control_ready()
+        self.guard.control.expire_hold()
+        self.guard.sync_pending_timer()
 
     def verify_(self, timer):
         value = timer.userInfo()

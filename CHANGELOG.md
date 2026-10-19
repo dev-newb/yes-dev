@@ -14,6 +14,59 @@ while a mismatch persists. Credit to @Long-Trinh-Tien for the per-PID lookup in
 [401eb63](https://github.com/Long-Trinh-Tien/yes-dev/commit/401eb63516bf28a165675ffe4ba14740b603e7e1).
 The fork's comma-splitting fix was already included through @Icather's PR #3.
 
+### macOS: fast focus no longer stalls or refuses back-to-back connections
+
+1.4.0 broke fast focus for agents that connect in quick succession, and slowed
+every fast-focus connection by two seconds. The early-focus helper answered the
+first message on each control connection and never noticed the second, so the
+relay waited out a two-second timeout on every connection; and an agent arriving
+within six seconds of the previous one found the helper still holding that dead
+connection and was refused. Codex's three-client run hit it as an intermittent
+"Connection lost".
+
+The cause was the 1.4.0 change that stopped the helper polling. Its sockets are
+watched by CoreFoundation, and a watch armed while data is already waiting
+drops its callback if anything else reads that data first, after which it never
+fires again. The helper accepted a connection and read its first message in the
+same pass, which did exactly that. Now each socket is read only by its own watch:
+the listening socket's watch only accepts, a client's watch only reads. Against
+the real helper, five back-to-back control connections went from every reply
+timing out and every other connection refused to every reply in under 4 ms. Idle
+CPU stays at zero. Four new run-loop tests cover a message waiting at accept and
+a later one, back-to-back connections, a refused second connection, and a quiet
+connection staying quiet.
+
+### macOS: Chrome asks for the held connection when you open it
+
+With **Keep one Chrome connection open** on, the one prompt per launch used to
+come whenever the first agent connected, which could be while you were working
+in another app. Now the relay opens the held connection as soon as you start
+Chrome yourself: once Chrome is the active app with its window on top, and
+there has been no keyboard or mouse input for two seconds, so the sheet does not
+catch a keystroke and a Space does not press Cancel. Chrome is already in front
+at that moment, so the prompt takes nothing from you, and later agents find the
+connection open.
+
+It only happens for a Chrome that started while Yes, Dev was running, so an
+already-open Chrome is never prompted out of turn; only within a minute of the
+launch; and only once per launch, so a prompt you cancel is not repeated. If
+Chrome starts in the background or you are busy in it, nothing changes: the
+first agent opens the connection, as in 1.4.0.
+
+Which app is in front is read from Launch Services and the window server
+together. NSWorkspace goes stale in a process without an AppKit event loop, and
+the system-wide Accessibility query answered "cannot complete" on this Mac.
+
+Fourteen new tests cover the launch decision, with stub probes and a fake
+clock, and opening the held connection with no client against the strict fake
+Chrome. Each rule, removed on its own, fails a test. Live on Chrome 154: a
+foreground launch was approved once with no app switch and then served a raw
+client and Playwright without another prompt; a background launch and a Chrome
+already running were left alone until the first client; a restart was primed
+again; seven seconds of real typing in the address bar held the prompt off
+until 2.6 seconds after the last key, with nothing typed into the sheet; and a
+cancelled launch prompt was not repeated.
+
 ## 1.4.0 - 2026-10-03
 
 macOS: optionally keep one Chrome connection open, so Chrome asks once per
@@ -24,7 +77,7 @@ install.
 
 ### macOS: hold one Chrome connection, so Chrome asks once per launch
 
-A new option under **Settings… → Focus & connection**, off by default:
+A new option under **Settingsâ€¦ â†’ Focus & connection**, off by default:
 **Keep one Chrome connection open**. With fast focus on, the relay keeps the
 first approved Chrome connection open and lends it to one client at a time.
 Later clients reuse it, so Chrome prompts once per launch instead of once per
@@ -119,7 +172,7 @@ nothing new to install.
 
 ### macOS: settings window and optional fast-focus relay
 
-**Settings…** opens a native window for approval, timing, notices, burst behavior,
+**Settingsâ€¦** opens a native window for approval, timing, notices, burst behavior,
 login, diagnostics, and focus. Save validates values before applying them;
 Cancel leaves saved settings alone. Writes use atomic replacement and preserve
 unknown settings. The menu no longer asks macOS users to open a JSON file.

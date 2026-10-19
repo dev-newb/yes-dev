@@ -326,7 +326,9 @@ class YesDev(rumps.App):
                 "--port", str(self.cfg["relay_port"]), "--exit-with-parent",
                 "--parent-pid", str(os.getpid())]
         if self.cfg.get("relay_hold"):
-            args.append("--hold")
+            # Open it when Chrome starts and you are in it, not when an agent
+            # first connects while you are working elsewhere.
+            args += ["--hold", "--prime"]
         try:
             self.relay = subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             log(f"relay started pid={self.relay.pid}")
