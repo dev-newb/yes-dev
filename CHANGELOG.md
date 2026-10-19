@@ -5,6 +5,44 @@ measured - the numbers are from this repo's own runs, not estimates.
 
 ## Unreleased
 
+### Windows: independent startup and exit records
+
+The Windows entry point now asks the desktop Explorer process to start the tray
+when the caller is a tool or terminal. It verifies the child's desktop parent
+and job limits. A single process-breakaway flag is not used as proof that all
+outer jobs were left. Existing shortcuts use the same guarded entry point.
+
+Per-session lifecycle records include process and parent identity, job limits,
+startup readiness, heartbeats, exit requests, supervisor exits, exception
+tracebacks, and actual process exit codes. A separate exit watcher can record
+termination that bypasses Python cleanup. Native fault output is retained.
+The next startup marks a missing exit record as unknown if both processes were
+stopped. The tray has an **Open startup/exit records** item.
+
+No-UI process tests close a test caller's kill-on-close job and require the
+independent app to survive. Other tests cover import/main/thread exceptions,
+forced termination, cleanup bypass, normal exits, and simulated session messages.
+No user browser or OS shutdown is used for those tests.
+
+### Windows: speed selection and stalled approval recovery
+
+All three Speed menu choices now pass their integer interval to the watcher.
+Previously, pystray's menu-item argument replaced that value, which prevented
+config saves and made PowerShell exit repeatedly.
+
+The tray now starts a Win32 supervisor with up to four dialog-scoped workers.
+UI Automation calls, dismissal checks, and COM finalizers run in the workers.
+A worker that stops reporting progress is terminated after five seconds and
+its prompt is retried with the native legacy method first. A Windows job object
+terminates workers if the supervisor exits. Concurrent approval logs use a shared
+mutex, released before console output.
+
+Isolated Chrome and Edge tests cover all three speeds, English and Chinese,
+observe mode, a forced 30-second stall, and termination during a blocked call.
+The stall test requires other prompts to complete before recovery and requires
+the stalled prompt's connection to complete after retry. Tests use private
+desktops and fresh profiles; no active user browser is used.
+
 ### Windows: check the current dialog owner
 
 Resolve each consent dialog's owning process by PID instead of caching browser
@@ -77,7 +115,7 @@ install.
 
 ### macOS: hold one Chrome connection, so Chrome asks once per launch
 
-A new option under **Settingsâ€¦ â†’ Focus & connection**, off by default:
+A new option under **SettingsÃ¢â‚¬Â¦ Ã¢â€ â€™ Focus & connection**, off by default:
 **Keep one Chrome connection open**. With fast focus on, the relay keeps the
 first approved Chrome connection open and lends it to one client at a time.
 Later clients reuse it, so Chrome prompts once per launch instead of once per
@@ -172,7 +210,7 @@ nothing new to install.
 
 ### macOS: settings window and optional fast-focus relay
 
-**Settingsâ€¦** opens a native window for approval, timing, notices, burst behavior,
+**SettingsÃ¢â‚¬Â¦** opens a native window for approval, timing, notices, burst behavior,
 login, diagnostics, and focus. Save validates values before applying them;
 Cancel leaves saved settings alone. Writes use atomic replacement and preserve
 unknown settings. The menu no longer asks macOS users to open a JSON file.

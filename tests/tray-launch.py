@@ -15,6 +15,8 @@ method = next(node for cls in tree.body if isinstance(cls, ast.ClassDef)
 calls = []
 env = {
     'WATCHER': root / 'watcher.ps1',
+    'SUPERVISOR': root / 'watcher_supervisor.py',
+    'sys': SimpleNamespace(executable=sys.executable),
     'LOG_PATH': output.parent / 'unused-test.log',
     'subprocess': SimpleNamespace(Popen=lambda args, **kwargs:
         calls.append({'args': args, **kwargs}) or SimpleNamespace(pid=98765)),
@@ -32,7 +34,8 @@ for edge, observe in [(False, False), (True, False), (True, True)]:
     env['start_engine'](instance)
     args = calls[-1]['args']
     passed = (
-        args[args.index('-BrowserProcess') + 1] == ('chrome,msedge' if edge else 'chrome')
+        args[:2] == [sys.executable, str(root / 'watcher_supervisor.py')]
+        and args[args.index('-BrowserProcess') + 1] == ('chrome,msedge' if edge else 'chrome')
         and ('-Observe' in args) == observe
         and args[args.index('-ParentPid') + 1] == '12345'
         and calls[-1]['creationflags'] == subprocess.CREATE_NO_WINDOW

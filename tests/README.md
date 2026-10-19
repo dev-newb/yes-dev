@@ -10,6 +10,51 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File tests/run-windows-tests.
 Use `-Python` to select a Python executable and `-ResultDirectory` to select a
 new, empty result directory. Results include JSON reports and the native test log.
 
+To check all three Speed menu choices with the Windows app dependencies installed:
+
+```powershell
+python -m unittest discover -s tests -p test_speed_menu.py -v
+```
+
+This test calls the real pystray menu items and checks integer values, saved
+config, check marks, restart requests, and watcher arguments. It uses a temporary
+config and mocks process creation, so it does not start a tray or watcher.
+
+The main Windows test runner also runs the supervisor scheduler tests and a
+four-writer log test. To run just the scheduler tests:
+
+```powershell
+python -m unittest discover -s tests -p test_watcher_supervisor.py -v
+```
+
+The runner also tests independent startup and lifecycle records:
+
+```powershell
+python -m unittest discover -s tests -p test_windows_runtime.py -v
+```
+
+These tests use small no-UI Python fixtures with private diagnostic directories.
+They ask the real desktop Explorer broker to launch the fixtures. Closing an
+owned kill-on-close job must stop the caller while the independent fixture
+continues to write heartbeats. Other cases check exceptions, forced termination,
+exit codes, stale-session records, and fake tray session-end messages. They do
+not open a browser, create an app tray icon, or send shutdown messages to Windows.
+
+To test the complete supervisor and real Chrome/Edge consent flow:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File tests/run-supervisor-browser-tests.ps1 -Python python
+```
+
+This uses separate private desktops and fresh profiles. It tests all three
+speeds, Chinese dialogs, eight simultaneous connections, observe mode, and
+supervisor termination while a worker is blocked. A test-only copy injects a
+30-second stall after an Allow button has been identified. Healthy prompts must
+finish before the stall timeout, and the blocked prompt must complete after
+worker recovery. Each successful connection must answer `Browser.getVersion`
+and produce exactly one persisted ACTION event. Only test-owned processes are
+stopped. These are short tests, not an unattended soak.
+
 - `watcher-regression.ps1` extracts the original functions and one bounded loop
   body, with desktop access, processes and logging replaced by test data.
   Owner checks include Chrome and Edge restarts between adjacent sweeps, PID
