@@ -81,9 +81,9 @@ try {
             $definition=$definition.Replace('$Element.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()',"throw 'Injected primary failure for fallback test'")
         }
         . ([scriptblock]::Create($definition))
-        $Observe=$false; $parent=$null; $approved=0; $lastSeen=@{}; $procIds=@(); $pidsAt=[datetime]::MinValue
+        $Observe=$false; $parent=$null; $approved=0; $lastSeen=@{}
         $pendingApprovals=@{}
-        $lastTidy=[datetime]::Now; $procIdsWarned=$false; $IntervalMs=100
+        $lastTidy=[datetime]::Now; $ownerWarned=$false; $IntervalMs=100
         $cancel=New-Object Threading.CancellationTokenSource
         $cancel.CancelAfter(20000)
         $sockets=@();$connects=@()

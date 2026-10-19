@@ -82,9 +82,20 @@ function Invoke-LegacyElement {
     return $true
 }
 function Get-Process {
-    param([string[]]$Name, $ErrorAction)
+    param([string[]]$Name, [int]$Id, $ErrorAction)
     $script:processReads++
-    foreach ($n in $Name) { if ($script:processTable.ContainsKey($n)) { [pscustomobject]@{Id=$script:processTable[$n]} } }
+    if ($script:failProcessRead) { throw 'Process access failed' }
+    if ($PSBoundParameters.ContainsKey('Id')) {
+        foreach ($n in $script:processTable.Keys) {
+            if ($script:processTable[$n] -eq $Id) {
+                $process = [pscustomobject]@{Id=$Id;ProcessName=$n}
+                $process | Add-Member ScriptMethod Dispose { $script:processDisposals++ }
+                return $process
+            }
+        }
+    } else {
+        foreach ($n in $Name) { if ($script:processTable.ContainsKey($n)) { [pscustomobject]@{Id=$script:processTable[$n]} } }
+    }
 }
 function Set-Browsers([string[]]$Names) {
     $BrowserProcess = $Names
@@ -112,7 +123,8 @@ function Reset-Case {
     Set-Browsers @('chrome')
     $script:Observe = $false; $script:parent = $null; $script:approved = 0
     $script:lastSeen = @{}; $script:pendingApprovals=@{}; $script:procIds = @(); $script:pidsAt = [datetime]::MinValue
-    $script:procIdsWarned = $false; $script:lastTidy = [datetime]::Now
+    $script:procIdsWarned = $false; $script:ownerWarned=$false; $script:lastTidy = [datetime]::Now
+    $script:failProcessRead=$false; $script:processDisposals=0
     $script:IntervalMs = 0; $script:processReads = 0
     $script:messages = New-Object System.Collections.ArrayList
     $script:processTable = @{chrome=101; msedge=202}
@@ -166,10 +178,10 @@ Test-Case 'Cancel and settings buttons rejected' { Set-Buttons @('Turn off in se
 Test-Case 'Chinese cancel and settings rejected' { $window.TitleText=$zhTitle; Set-Buttons @($zhCancel,$zhSettings); . $sweep; Assert-Equal $script:clicks 0 'Chinese unsafe buttons' }
 Test-Case 'Legacy invocation fallback' { $script:failInvoke=$true; . $sweep; Assert-Equal $script:clicks 1 'Fallback clicks' }
 Test-Case 'Both invocation methods fail' { $script:failInvoke=$true; $script:failLegacy=$true; . $sweep; Assert-Equal $script:clicks 0 'Failed invocation'; Assert-Equal $approved 0 'False success'; Assert-Equal $lastSeen.Count 0 'Retry after failure' }
-Test-Case 'Repeated sweep deduplicates' { . $sweep; . $sweep; Assert-Equal $script:clicks 1 'Duplicate click'; Assert-Equal $script:processReads 1 'PID cache' }
+Test-Case 'Repeated sweep deduplicates' { . $sweep; . $sweep; Assert-Equal $script:clicks 1 'Duplicate click'; Assert-Equal $script:processReads 1 'Only the visible prompt needs a lookup' }
 Test-Case 'No dialogs avoids process lookup' { [YesDevWin]::Windows.Clear(); . $sweep; Assert-Equal $script:processReads 0 'Idle process lookup'; Assert-Equal $script:clicks 0 'Idle clicks' }
-Test-Case 'Missing processes warns once' { $script:processTable=@{}; . $sweep; $pidsAt=[datetime]::MinValue; . $sweep; $warnings=@($script:messages | Where-Object {$_ -like 'WARN:browser list*'}).Count; Assert-Equal $warnings ([int]$hasProcessFix) 'Warning count'; Assert-Equal $script:clicks 0 'Missing process clicks' }
-Test-Case 'Warning resets after recovery' { $script:closeOnAction=$false; $script:processTable=@{}; . $sweep; $script:processTable=@{chrome=101}; $pidsAt=[datetime]::MinValue; . $sweep; $script:processTable=@{}; $pidsAt=[datetime]::MinValue; . $sweep; $warnings=@($script:messages | Where-Object {$_ -like 'WARN:browser list*'}).Count; Assert-Equal $warnings (2*[int]$hasProcessFix) 'Recovered warning count' }
+Test-Case 'Missing processes warns once' { $script:processTable=@{}; . $sweep; $pidsAt=[datetime]::MinValue; . $sweep; $warnings=@($script:messages | Where-Object {$_ -match '^WARN:(browser list|dialog owner)'}).Count; Assert-Equal $warnings ([int]$hasProcessFix) 'Warning count'; Assert-Equal $script:clicks 0 'Missing process clicks' }
+Test-Case 'Warning resets after recovery' { $script:closeOnAction=$false; $script:processTable=@{}; . $sweep; $script:processTable=@{chrome=101}; $pidsAt=[datetime]::MinValue; . $sweep; $script:processTable=@{}; $pidsAt=[datetime]::MinValue; . $sweep; $warnings=@($script:messages | Where-Object {$_ -match '^WARN:(browser list|dialog owner)'}).Count; Assert-Equal $warnings (2*[int]$hasProcessFix) 'Recovered warning count' }
 Test-Case 'Custom title override preserved' { $DialogPattern='^Custom consent$'; $window.TitleText='Custom consent'; . $sweep; Assert-Equal $script:clicks 1 'Custom title' }
 Test-Case 'Custom button override preserved' { $ApprovePattern='^Permit$'; Set-Buttons @('Permit'); . $sweep; Assert-Equal $script:clicks 1 'Custom button' }
 Test-Case 'Ignored action does not increment counter' {
@@ -225,6 +237,64 @@ Test-Case 'Failed event persistence retains pending confirmation for retry' {
     $script:failLog=$false; . $sweep; . $sweep
     Assert-Equal $approved 1 'Persisted once after recovery'
     Assert-Equal @($messages | Where-Object {$_ -like 'ACTION:*'}).Count 1 'One persisted event'
+}
+foreach ($browserName in @('chrome','msedge')) {
+    Test-Case "Restarted $browserName is accepted on the next sweep" {
+        Set-Browsers @('chrome,msedge')
+        $window.ProcessId=$script:processTable[$browserName]
+        . $sweep
+        $script:processTable[$browserName]=303
+        $window.ProcessId=303; $window.Handle=[IntPtr]12; $window.Visible=$true
+        Set-Buttons @('Cancel','Allow')
+        . $sweep
+        Assert-Equal $script:clicks 2 'New PID does not wait for cache expiry'
+        Assert-Equal $approved 2 'Both prompts counted'
+    }
+}
+Test-Case 'Reused PID owned by another program is rejected' {
+    . $sweep
+    $script:processTable=@{notepad=101}
+    $window.Handle=[IntPtr]12; $window.Visible=$true
+    Set-Buttons @('Cancel','Allow'); . $sweep
+    Assert-Equal $script:clicks 1 'Stale browser PID cannot authorize a click'
+}
+Test-Case 'Owner lookup failure is rejected and can recover' {
+    $script:failProcessRead=$true; . $sweep
+    Assert-Equal $script:clicks 0 'Lookup failure is closed'
+    $script:failProcessRead=$false; . $sweep
+    Assert-Equal $script:clicks 1 'Lookup recovery has no cache delay'
+}
+Test-Case 'Zero owner PID is rejected without process lookup' {
+    $window.ProcessId=0; . $sweep
+    Assert-Equal $script:clicks 0 'No owner clicks'
+    Assert-Equal $script:processReads 0 'No PID zero lookup'
+}
+Test-Case 'Mixed owners do not repeat the warning every sweep' {
+    $script:closeOnAction=$false
+    $foreign=New-Object FakeWindow
+    $foreign.Handle=[IntPtr]12; $foreign.Class=$window.Class; $foreign.TitleText=$window.TitleText
+    $foreign.ProcessId=999; $foreign.Visible=$true
+    [YesDevWin]::Windows.Add($foreign)
+    $script:processTable.notepad=999
+    . $sweep; . $sweep; . $sweep
+    Assert-Equal @($messages | Where-Object {$_ -like 'WARN:dialog owner*'}).Count 1 'One continuous mismatch warning'
+    Assert-Equal $script:clicks 1 'Only the allowed owner is clicked'
+    Assert-Equal $script:processDisposals $script:processReads 'Process objects released'
+}
+Test-Case 'Process names match without case sensitivity' {
+    $script:processTable=@{CHROME=101}; . $sweep
+    Assert-Equal $script:clicks 1 'Windows process-name case'
+    Assert-Equal $script:processDisposals 1 'Owner process released'
+}
+Test-Case 'Browser restart clears the original pending identity' {
+    $script:closeOnAction=$false; . $sweep
+    $script:processTable.chrome=303; $window.ProcessId=303
+    Set-Buttons @('Cancel','Allow'); . $sweep
+    Assert-Equal $approved 1 'Old owner dismissal counted once'
+    Assert-Equal $script:clicks 2 'New owner gets its own attempt'
+    Assert-Equal $pendingApprovals.Count 1 'Only new owner remains pending'
+    $window.Visible=$false; . $sweep
+    Assert-Equal $approved 2 'New owner dismissal counted once'
 }
 $sha = [Security.Cryptography.SHA256]::Create()
 $sourceHash = [BitConverter]::ToString($sha.ComputeHash([IO.File]::ReadAllBytes($SourcePath))).Replace('-','')

@@ -5,6 +5,15 @@ measured - the numbers are from this repo's own runs, not estimates.
 
 ## Unreleased
 
+### Windows: check the current dialog owner
+
+Resolve each consent dialog's owning process by PID instead of caching browser
+PIDs for five seconds. A restarted Chrome or Edge can now pass the owner check
+on the next sweep. Unknown or unreadable owners remain blocked, with one warning
+while a mismatch persists. Credit to @Long-Trinh-Tien for the per-PID lookup in
+[401eb63](https://github.com/Long-Trinh-Tien/yes-dev/commit/401eb63516bf28a165675ffe4ba14740b603e7e1).
+The fork's comma-splitting fix was already included through @Icather's PR #3.
+
 ### macOS: fast focus no longer stalls or refuses back-to-back connections
 
 1.4.0 broke fast focus for agents that connect in quick succession, and slowed
@@ -68,7 +77,7 @@ install.
 
 ### macOS: hold one Chrome connection, so Chrome asks once per launch
 
-A new option under **Settings… → Focus & connection**, off by default:
+A new option under **Settingsâ€¦ â†’ Focus & connection**, off by default:
 **Keep one Chrome connection open**. With fast focus on, the relay keeps the
 first approved Chrome connection open and lends it to one client at a time.
 Later clients reuse it, so Chrome prompts once per launch instead of once per
@@ -163,7 +172,7 @@ nothing new to install.
 
 ### macOS: settings window and optional fast-focus relay
 
-**Settings…** opens a native window for approval, timing, notices, burst behavior,
+**Settingsâ€¦** opens a native window for approval, timing, notices, burst behavior,
 login, diagnostics, and focus. Save validates values before applying them;
 Cancel leaves saved settings alone. Writes use atomic replacement and preserve
 unknown settings. The menu no longer asks macOS users to open a JSON file.

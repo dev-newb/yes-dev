@@ -409,9 +409,7 @@ Write-Log "engine started (observe=$($Observe.IsPresent), interval=${IntervalMs}
 $approved   = 0
 $lastSeen   = @{}                    # hwnd -> last action, so one dialog is not clicked twice
 $pendingApprovals = @{}             # hwnd + button identity -> pending dismissal
-$procIds    = @()
-$pidsAt     = [datetime]::MinValue
-$procIdsWarned = $false              # report an unusable -BrowserProcess once, not never
+$ownerWarned = $false               # warn once while unmatched dialog owners persist
 $lastTidy   = [datetime]::Now
 $self       = [System.Diagnostics.Process]::GetCurrentProcess()
 $parent     = $null
@@ -437,32 +435,33 @@ while ($true) {
         }
         $hwnds = Find-DialogWindows
 
+        $ownerMismatch = $false
         if ($hwnds.Count -gt 0) {
             $usedAutomation = $true
-            # Only now is the Chrome process list worth reading. Cached for a few
-            # seconds either way: Get-Process allocates, and the set barely moves.
-            if (((Get-Date) - $pidsAt).TotalSeconds -gt 5) {
-                $procIds = @(Get-Process -Name $BrowserProcess -ErrorAction SilentlyContinue |
-                             Select-Object -ExpandProperty Id)
-                $pidsAt = Get-Date
-                # A dialog is on screen yet not one browser process matched: the name
-                # list is wrong and every window below falls through the PID guard.
-                # Say so once, instead of doing nothing in silence for days.
-                if ($procIds.Count -eq 0) {
-                    if (-not $procIdsWarned) {
-                        Write-Log "browser list matched no process: $($BrowserProcess -join '+')" 'WARN'
-                        $procIdsWarned = $true
-                    }
-                } else {
-                    $procIdsWarned = $false
-                }
-            }
-
             foreach ($h in $hwnds) {
                 try {
                     # Belt and braces: the class and title already say Chrome, but
                     # never press a button in a window that is not one of ours.
-                    if ($procIds -notcontains [int][YesDevWin]::Pid($h)) { continue }
+                    # Resolve this owner now: a browser restart must not wait for
+                    # a cached process list to expire. No lookup runs while idle.
+                    $ownerPid = [int][YesDevWin]::Pid($h)
+                    $ownerName = $null
+                    $ownerProcess = $null
+                    try {
+                        if ($ownerPid -gt 0) {
+                            $ownerProcess = Get-Process -Id $ownerPid -ErrorAction SilentlyContinue
+                            if ($ownerProcess) { $ownerName = $ownerProcess.ProcessName }
+                        }
+                    } catch {
+                        # An exited or inaccessible process cannot authorize a click.
+                        $ownerName = $null
+                    } finally {
+                        if ($ownerProcess) { $ownerProcess.Dispose() }
+                    }
+                    if (-not $ownerName -or $BrowserProcess -notcontains $ownerName) {
+                        $ownerMismatch = $true
+                        continue
+                    }
 
                     $key = [string]$h
                     $last = $lastSeen[$key]
@@ -479,6 +478,11 @@ while ($true) {
             }
 
         }
+
+        if ($ownerMismatch -and -not $ownerWarned) {
+            Write-Log "dialog owner unavailable or outside browser list: $($BrowserProcess -join '+')" 'WARN'
+        }
+        $ownerWarned = $ownerMismatch
 
         $completed = Complete-PendingApprovals
         if ($completed -gt 0) {
