@@ -5,6 +5,22 @@ measured - the numbers are from this repo's own runs, not estimates.
 
 ## Unreleased
 
+## 1.5.0 - 2026-10-19
+
+### Windows: ready-to-run portable ZIP
+
+The release provides `YesDev-1.5.0-windows-x64.zip` with a native `YesDev.exe`
+launcher, a private CPython 3.14.5 runtime, Tcl/Tk, pystray, Pillow, and six.
+Extract the whole ZIP and run the launcher; no system Python or pip is needed.
+The runtime uses an isolated module path. Existing settings stay under
+`%LOCALAPPDATA%\YesDev`. The launcher is unsigned and requires Windows x64,
+Windows PowerShell 5.1, .NET Framework 4.x, and the desktop Explorer shell.
+
+The build script pins app dependency versions, includes license files, records
+the source commit and per-file hashes, and writes a ZIP checksum. The extraction
+test checks every file and runs the launcher with external Python paths blocked.
+The separate private-browser test runner can validate an extracted runtime.
+
 ### Windows: independent startup and exit records
 
 The Windows entry point now asks the desktop Explorer process to start the tray

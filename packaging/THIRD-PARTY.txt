@@ -1,0 +1,16 @@
+This ZIP redistributes a private CPython runtime and these Python packages:
+
+CPython - Python Software Foundation License and included third-party notices.
+  https://www.python.org/ - runtime/LICENSE.txt and licenses/Python-LICENSE.txt
+pystray 0.19.5 - LGPLv3, including its distributed Python source files.
+  https://github.com/moses-palmer/pystray
+Pillow 12.2.0 - MIT-CMU and included component notices.
+  https://python-pillow.org/
+six 1.17.0 - MIT.
+  https://github.com/benjaminp/six
+
+Package license texts are retained in runtime/Lib/site-packages/*.dist-info and
+copied to licenses/. CPython's DLLs and Tcl/Tk files are distributed with the
+runtime's original notices. See the included license files for their terms.
+
+No user browser, user profile, credential, or machine-local config is included.
