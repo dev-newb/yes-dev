@@ -14,6 +14,15 @@ parent and Windows job limits. The exit watcher records the tray's exit code.
 The supervisor owns a kill-on-close job for its workers; closing it stops them.
 Direct standalone `watcher.ps1` use remains synchronous and has no supervisor.
 
+With the optional Windows held-connection setting enabled, the tray also owns
+`relay_windows.py`. It uses the shared `cdp_relay.py` transport, opens Chrome
+on client demand, and retains one connection for sequential clients. It binds
+to the original tray process identity and exits when that parent ends. Status
+sampling runs separately from process control, so slow file reads do not delay
+shutdown. Off, pause, Observe only, and Quit stop the owned relay without
+closing Chrome. The separate resident Chrome DevTools MCP bridge is not managed
+by Yes, Dev.
+
 On macOS, the menu-bar app owns the Accessibility engine and optional overlay,
 burst dialog, and focus helper. Fast focus uses a local relay and its early-focus
 helper. Those helpers are tied to their parent processes. The relay can keep an
@@ -26,7 +35,7 @@ option restarts that engine. See [troubleshooting](troubleshooting.md#logs-and-s
 for current log locations and retention; they do not all use one rotation policy.
 
 The common approval settings use the same keys and defaults on both platforms.
-macOS adds focus and relay settings. Both builds read `utf-8-sig` so settings
+Both platforms add relay settings; macOS also has focus settings. Both builds read `utf-8-sig` so settings
 copied from Windows can include a byte-order mark. The macOS settings writer
 validates changes and replaces the file atomically, retaining unknown keys.
 
@@ -243,7 +252,9 @@ in the data directory.
 | `puffs.py` | The cloud overlay and the shared artwork. Its own process. |
 | `puffs_mac.py` | The macOS cloud overlay. Its own process. |
 | `focus_guard_mac.py` | The macOS focus guard behind Quiet focus. Its own process. |
-| `relay_mac.py`, `cdp_relay.py` | Optional macOS CDP relay and independent client transports |
+| `cdp_relay.py` | Shared loopback CDP transport, held reuse, client cleanup, and request limits |
+| `relay_windows.py` | Windows relay host, parent identity, status, retry, and owned-child lifecycle |
+| `relay_mac.py` | macOS relay host and early-focus integration |
 | `early_focus_guard_mac.py`, `focus_protocol.py` | Early-focus helper and single-use request policy |
 | `burst_dialog.py` | The five-second burst prompt. Also its own process. Shared. |
 | `docs/mac/ax_probe.py` | Dumps Chrome's accessibility tree around the dialog |
@@ -252,7 +263,8 @@ in the data directory.
 
 The Windows package contains the files listed by `packaging/build_windows.py`.
 The build and extraction checks are described in [packaging](../packaging/README.md).
-The macOS relay in the source tree is not exposed by the Windows tray.
+Current builds include the Windows relay modules and websockets. The published
+v1.5.0 Windows package predates that feature.
 
 ## Standalone observation
 

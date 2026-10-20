@@ -1,5 +1,82 @@
 # Windows tests
 
+## Windows held Chrome relay
+
+Use a full Windows CPython interpreter for tests that use the Explorer launch
+broker. A virtual environment is sufficient for relay transport and manager
+tests, but its `pythonw.exe` redirector does not pass the launch-broker fixtures
+on this host. Install source dependencies in a separate QA environment.
+
+```powershell
+python -m unittest discover -s tests -p test_relay_windows.py -v
+python -m unittest discover -s tests -p test_windows_relay_tray.py -v
+python -m unittest discover -s tests -p test_windows_relay_packaging.py -v
+python -m unittest discover -s tests -p test_cdp_relay*.py -v
+```
+
+These use temporary data, fake loopback Chrome endpoints, and owned helper
+processes. They cover parent process identity, graceful stop, forced cleanup,
+retry delays, port conflicts, missing dependencies, tray lifecycle gates, and
+packaging. They do not start the installed app or use current browser profiles.
+
+For real protocol checks, install Node Playwright and puppeteer-core in a
+separate QA directory. `windows_relay_live.py --help` lists its paths. The test
+starts its own headless Chrome with a new profile, checks both client libraries,
+session cleanup, concurrent clients, browser restart, HTTP rejection, and safe
+relay stop. It writes a JSON report. Headless checks do not prove native consent.
+
+For real Chrome consent on a separate desktop, create a fresh result directory
+with `config.json` containing an absolute Python path and an interval:
+
+```json
+{"python":"C:\\qa\\Scripts\\python.exe","interval":150}
+```
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File tests/run-private-desktop.ps1 -ScriptPath tests/windows-relay-consent-private.ps1 -SourcePath watcher.ps1 -ResultDirectory C:\qa\relay-consent-150 -TimeoutSeconds 100
+```
+
+Use a new result directory for each interval: 150, 250, and 750 ms. The driver
+refuses to run on the current desktop. It copies the approval engine with a
+unique mutex, starts a fresh Chrome profile and the Windows relay host, and
+requires exactly one approval for three sequential clients and one more for a
+concurrent client. `Browser.close` and relay stop must leave the test browser
+alive. Only owned processes are stopped; the input desktop is never switched.
+To test an extracted portable runtime, set `python` to its `runtime\python.exe`
+and `-SourcePath` to its `app\watcher.ps1`.
+
+## Approval engine and launch checks
+
+For the adversarial relay suite:
+
+```powershell
+python -m unittest discover -s tests -p test_cdp_relay_adversarial.py -v
+python -m unittest discover -s tests -p test_relay_windows_adversarial.py -v
+python tests/windows_relay_adversarial_live.py --output C:\qa\relay-faults.json
+```
+
+The first two suites use loopback fixtures and temporary files. The live fault
+driver uses new headless Chrome profiles and test-owned host processes. It
+checks forced helper failure, 40 rapid setting changes, port recovery, incomplete
+endpoint files, and active-client shutdown. It also verifies that binary and
+escaped close commands leave Chrome running. Retry delays are shortened only
+in that driver. It records its result and confirms owned helpers stopped.
+
+For bounded resource and performance checks:
+
+```powershell
+python -m unittest discover -s tests -p test_cdp_relay_resource_limits.py -v
+python -m unittest discover -s tests -p test_relay_windows_performance.py -v
+python tests/windows_relay_performance_live.py --output C:\qa\relay-performance.json
+```
+
+The live check creates a private headless Chrome profile and owned Windows
+helper. It starts the helper before Chrome, waits 90 seconds idle, measures
+process counters and CDP round trips, checks 1 MiB/4 MiB replies, then makes 300
+sequential connections. All test-owned processes stop afterward. CPU/latency
+numbers are measurements, not machine-speed acceptance thresholds. This is not
+an overnight soak.
+
 Run these tests with Windows PowerShell 5.1 and Python 3. The tests do not start
 the tray app or the production watcher. They do not change installed app files.
 

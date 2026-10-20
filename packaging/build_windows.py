@@ -16,7 +16,8 @@ import sys
 import zipfile
 
 
-APP_FILES = ("yes_dev.pyw", "windows_runtime.py", "watcher_supervisor.py", "watcher.ps1", "puffs.py", "burst_dialog.py")
+APP_FILES = ("yes_dev.pyw", "windows_runtime.py", "watcher_supervisor.py", "watcher.ps1", "puffs.py", "burst_dialog.py",
+             "cdp_relay.py", "relay_windows.py")
 
 
 def sha256(path):

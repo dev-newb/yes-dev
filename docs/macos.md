@@ -54,7 +54,7 @@ also switch Spaces. See [focus test limits](../tests/README.md).
 
 ### Fast focus through the local relay (macOS, experimental)
 
-In **Settingsâ€¦ â†’ Focus & connection**, choose **Fast focus via local relay**,
+In **Settings… > Focus & connection**, choose **Fast focus via local relay**,
 select Chrome's data folder, and Save. The data folder contains `Local State`
 and `DevToolsActivePort` (normally `~/Library/Application Support/Google/Chrome`),
 rather than its `Default` or `Profile 1` subfolder. Enable Remote Debugging in

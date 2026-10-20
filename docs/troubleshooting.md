@@ -68,7 +68,7 @@ format is not implemented by the macOS source app. See the
 | Worker recovery | `supervisor.log` | Not used |
 | Per-session startup/exit records | `lifecycle/sessions/<id>/` | Not used |
 | Launch attempts and latest ready session | `lifecycle/launches/`, `lifecycle/active.json` | Not used |
-| Relay/focus diagnostics | Not exposed in the Windows app | `relay.log`, `relay-focus.log`, `relay-status.json` |
+| Relay diagnostics | Current source: `relay.log`, `relay-runs/<id>/status.json`, `relay-runs/<id>/stderr.log` | `relay.log`, `relay-focus.log`, `relay-status.json` |
 
 The approval and tray logs rotate near 1 MB and retain a previous generation.
 Windows supervisor logging also rotates separately. Lifecycle records are
@@ -77,6 +77,31 @@ and session folders and stderr/native-fault files do not share the old two-log
 retention policy. Logs can contain process identities, paths, and exception text;
 review them before sharing.
 
+The Windows relay log rotates at 1 MiB with two backups. Its per-run diagnostic
+folders are retained separately. The published v1.5.0 Windows app has no relay
+controls or relay logs.
+
+## Windows relay does not connect
+
+- Confirm that you run current source or a package built from it. The v1.5.0
+  release does not include the Windows relay.
+- Enable **On** and **Options > Keep one Chrome connection open**. Pause and
+  Observe only stop the relay.
+- Point the client at the configured relay address, normally
+  `http://127.0.0.1:9333`. Direct connections to Chrome do not get reuse.
+- Check that `relay_profile` names the User Data root containing
+  `DevToolsActivePort`, and that Chrome remote debugging is enabled.
+- If the port is occupied, set another `relay_port` and update the client URL.
+  The relay reports the conflict without stopping the other program.
+- Read **Open relay log** and the current run's `stderr.log`. A missing
+  `websockets` dependency requires installing the current requirements again.
+
+**Listening** means the local endpoint is ready; it does not mean Chrome is
+already connected. The first client opens that connection. **Held** means the
+Chrome connection is open for reuse. A second concurrent client, browser
+restart, or failed cleanup can require another approval.
+[Complete setup and limits](windows-relay.md)
+
 ## Connection mode and focus
 
 Yes, Dev is for consent-based connections enabled through
@@ -84,11 +109,12 @@ Yes, Dev is for consent-based connections enabled through
 `--remote-debugging-port` or `--remote-debugging-pipe` is a different mode.
 See [Chrome's debugging-switch change](https://developer.chrome.com/blog/remote-debugging-port).
 
-On macOS, Fast focus and **Keep one Chrome connection open** apply to tools
-using the configured relay address. A tool connecting directly to Chrome can
-still cause another prompt. A second concurrent relay client can also need a
-separate prompt. These features are not options in Windows version 1.5.0.
-For setup and state-cleanup limits, see [macOS relay details](macos.md#fast-focus-through-the-local-relay-macos-experimental).
+Both platforms' held-connection options apply to tools using the configured
+relay address. A tool connecting directly to Chrome can still cause another
+prompt. A second concurrent relay client can also need a separate prompt.
+Fast focus is macOS-only; the Windows relay is in current source and is absent
+from version 1.5.0. See [Windows relay details](windows-relay.md) or
+[macOS relay details](macos.md#fast-focus-through-the-local-relay-macos-experimental).
 
 The upstream request for persisted approval,
 [#825](https://github.com/ChromeDevTools/chrome-devtools-mcp/issues/825), and the

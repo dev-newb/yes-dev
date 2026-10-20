@@ -70,6 +70,25 @@ The Windows tray exposes approval settings directly. On macOS, they are in
 | **Include Microsoft Edge** | Include Edge consent dialogs. |
 | **Open startup/exit records** | Windows lifecycle diagnostics. |
 
+### Keep one Chrome connection open on Windows
+
+Current `main` includes an optional Windows relay. **The published v1.5.0 ZIP
+and v1.5.0 source ZIP do not include it.** Use the
+[current source](https://github.com/dev-newb/yes-dev/archive/refs/heads/main.zip)
+or build a portable package from `main`.
+
+Enable **Options > Keep one Chrome connection open**, then point your CDP tool
+at `http://127.0.0.1:9333`. The first client opens the Chrome connection; later
+clients can reuse it. A concurrent client gets a separate connection and can
+need another approval. Direct Chrome connections do not use the relay.
+
+The option is off by default. It stops on Off, pause, Observe only, or Quit, and
+leaves Chrome running. Use the relay status row and **Open relay log** to check
+it. Windows focus restoration is not included.
+[Profile setup, client examples, and limits](docs/windows-relay.md)
+
+### Approval defaults
+
 Defaults on both platforms: approval on, Observe only off, Edge off, 250 ms
 checks, floating puffs, no disarm timer, and a 60-approvals-per-minute burst limit.
 Existing installations retain their saved settings.
@@ -91,8 +110,10 @@ In **Settings… > Focus & connection**, choose:
   Chrome connection and lend it to sequential clients. A concurrent client can
   need another connection and prompt.
 
-These options are off by default and are **macOS-only in v1.5.0**. Input can
-cancel the focus return; a brief interruption or Space switch can still occur.
+These options are off by default. Quiet focus and Fast focus remain
+**macOS-only**. Windows connection reuse is in current source, as described
+above, and is absent from v1.5.0. Input can cancel the macOS focus return;
+a brief interruption or Space switch can still occur.
 The relay stays resident while enabled and stops with the app, a pause, or
 Observe mode. It is an app-managed helper, not a separate system service.
 [Setup and reuse limits](docs/macos.md#focus-behavior)
@@ -145,6 +166,7 @@ focus, and held-connection limits are in the [macOS guide](docs/macos.md).
 ## More documentation
 
 - [Windows guide](docs/windows.md) and [macOS guide](docs/macos.md)
+- [Windows held-connection relay](docs/windows-relay.md)
 - [Troubleshooting](docs/troubleshooting.md)
 - [Architecture, process layout, and rendering](docs/architecture.md)
 - [Tests and validation limits](tests/README.md)

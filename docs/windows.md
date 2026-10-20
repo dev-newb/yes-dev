@@ -42,8 +42,10 @@ app is running does not make it load the new code.
 ## Source installation
 
 Use a real Windows Python 3.9+ interpreter and Windows PowerShell 5.1. Download
-the [source ZIP](https://github.com/dev-newb/yes-dev/archive/refs/tags/v1.5.0.zip)
-or clone the repository, then run these commands from the source folder:
+the [current source ZIP](https://github.com/dev-newb/yes-dev/archive/refs/heads/main.zip)
+or clone the repository, then run these commands from the source folder.
+The [v1.5.0 source ZIP](https://github.com/dev-newb/yes-dev/archive/refs/tags/v1.5.0.zip)
+is a fixed older version and does not include the Windows relay.
 
 ```powershell
 python -m pip install -r requirements.txt
@@ -54,6 +56,31 @@ If `python` resolves to a Windows Store alias, use the full path to the installe
 interpreter. For a Git installation, quit the tray and run `git pull --ff-only`,
 then install requirements again and start the app. A source ZIP update replaces
 the old source files; it does not require deleting the user data folder.
+
+## Keep one Chrome connection open
+
+Current `main` includes an optional relay for sequential Chrome debugging
+clients. The published v1.5.0 portable app does not include it. Use current
+source or a portable build made from `main`.
+
+1. Enable Chrome remote debugging at `chrome://inspect/#remote-debugging`.
+2. Select **Options > Keep one Chrome connection open** in the tray.
+3. Connect your browser tool to `http://127.0.0.1:9333`.
+
+The default Chrome User Data directory is
+`%LOCALAPPDATA%\Google\Chrome\User Data`. It must contain Chrome's
+`DevToolsActivePort` file. For another directory or port, use **Open config**,
+quit Yes, Dev, change `relay_profile` or `relay_port`, then restart it.
+
+The first client can need an approval. Later sequential clients reuse that
+connection. A concurrent client gets a separate connection and can need another
+approval. The relay is off by default and stops on Off, pause, Observe only,
+Quit, or loss of its parent tray process. It leaves Chrome running.
+
+Use the status row and **Open relay log** for connection errors. Quiet focus,
+Fast focus, and launch-time connection opening remain macOS features. The
+Windows relay does not change an existing Chrome DevTools MCP bridge or its
+scheduled task. [Client examples, settings, and limits](windows-relay.md)
 
 ## Diagnostics and supported mode
 
@@ -71,9 +98,8 @@ Read `runtime-check.json` beside the launcher. Keep that check separate from
 approval testing; successful imports do not prove a browser connection.
 
 Version 1.5.0 supports English and Simplified Chinese consent titles and Allow
-labels. It approves each matching prompt. Quiet focus, Fast focus, and held
-Chrome connection reuse are macOS-only options in this release. The Windows
-tray and package do not expose the macOS relay.
+labels. The current source keeps that approval behavior and adds the optional
+Windows relay described above.
 
 Cloud notices use the primary monitor and have limited multi-monitor/DPI test
 coverage. Overlay positioning does not control dialog matching. See
