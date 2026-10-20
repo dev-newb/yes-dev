@@ -62,6 +62,21 @@ endpoint files, and active-client shutdown. It also verifies that binary and
 escaped close commands leave Chrome running. Retry delays are shortened only
 in that driver. It records its result and confirms owned helpers stopped.
 
+For bounded resource and performance checks:
+
+```powershell
+python -m unittest discover -s tests -p test_cdp_relay_resource_limits.py -v
+python -m unittest discover -s tests -p test_relay_windows_performance.py -v
+python tests/windows_relay_performance_live.py --output C:\qa\relay-performance.json
+```
+
+The live check creates a private headless Chrome profile and owned Windows
+helper. It starts the helper before Chrome, waits 90 seconds idle, measures
+process counters and CDP round trips, checks 1 MiB/4 MiB replies, then makes 300
+sequential connections. All test-owned processes stop afterward. CPU/latency
+numbers are measurements, not machine-speed acceptance thresholds. This is not
+an overnight soak.
+
 Run these tests with Windows PowerShell 5.1 and Python 3. The tests do not start
 the tray app or the production watcher. They do not change installed app files.
 

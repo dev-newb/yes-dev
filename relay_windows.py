@@ -217,6 +217,7 @@ class RelayManager:
     RETRY_MIN = 2.0
     RETRY_MAX = 60.0
     START_TIMEOUT = 15.0
+    RETRY_RESET_AFTER = 60.0
 
     def __init__(self, root: Path, data_dir: Path, log=None):
         self.root = Path(root).resolve()
@@ -235,6 +236,8 @@ class RelayManager:
         self._retry_at = 0.0
         self._delay = self.RETRY_MIN
         self._started = 0.0
+        self._ready = False
+        self._healthy_since = None
         self._stop_reason = "disabled"
 
     def _event(self, message):
@@ -276,6 +279,17 @@ class RelayManager:
                 if (self._process is process and self._runtime == runtime
                         and self._run_id == run_id):
                     self._state = state
+                    now = time.monotonic()
+                    if state.get("state") == "listening":
+                        self._ready = True
+                    if (state.get("state") == "listening" and not state.get("last_error")
+                            and process.poll() is None):
+                        if self._healthy_since is None:
+                            self._healthy_since = now
+                        elif now - self._healthy_since >= self.RETRY_RESET_AFTER:
+                            self._delay = self.RETRY_MIN
+                    else:
+                        self._healthy_since = None
         except Exception as exc:
             self._event("Relay status read error: " + str(exc))
         finally:
@@ -324,12 +338,20 @@ class RelayManager:
             return
         if self._process is None and time.monotonic() < self._retry_at:
             return
+        if (self._process is not None and self._config == self._desired
+                and self._process.poll() is None
+                and (self._ready or self._state.get("state") in ("listening", "error")
+                     or time.monotonic() - self._started <= self.START_TIMEOUT)):
+            # Sampling is enough until exit, a config change, or startup timeout.
+            # Never wait for the sample: blocked I/O must not delay shutdown.
+            return
         # Each enabled sync requests a background status sample. Public calls
         # never open files, including while the helper is still starting.
         self._worker = threading.Thread(target=self._reconcile, name="YesDev relay lifecycle", daemon=True)
         self._worker.start()
 
     def _failed(self, error):
+        self._healthy_since = None
         self._error = error
         self._retry_at = time.monotonic() + self._delay
         self._delay = min(self.RETRY_MAX, self._delay * 2)
@@ -370,6 +392,7 @@ class RelayManager:
                     reason = self._stop_reason
                     exited = process is not None and process.poll() is not None
                     timed_out = (process is not None and not exited and desired == self._config
+                                   and not self._ready
                                  and state.get("state") not in ("listening", "error")
                                  and time.monotonic() - self._started > self.START_TIMEOUT)
                     if exited:
@@ -387,6 +410,7 @@ class RelayManager:
                     with self._lock:
                         self._process = self._config = None
                         self._state = {}
+                        self._healthy_since = None
                     continue
                 with self._lock:
                     # Recheck desired after stop work; changes can arrive at any time.
@@ -414,6 +438,8 @@ class RelayManager:
                     self._runtime, self._run_id = runtime, run_id
                     self._state = {}
                     self._started = time.monotonic()
+                    self._ready = False
+                    self._healthy_since = None
                     self._error = ""
                     self._wake_sampler()
                     self._event(f"Relay start: pid={child.pid} run={run_id}")

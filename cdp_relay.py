@@ -31,6 +31,7 @@ from websockets.protocol import State
 LOGGER = logging.getLogger("yesdev.relay")
 RELAY_PATH = "/devtools/browser/yesdev"
 MAX_MESSAGE = 64 * 1024 * 1024
+MAX_PENDING_CALLS = 4096  # a stalled Chrome must not retain unlimited client calls
 HOLD_RESET_TIMEOUT = 2.0   # seconds to undo a departed client's state
 HOLD_RESET_ROUNDS = 3      # sessions can attach while the first round runs
 # Cleanup whose failure only means the thing was already gone: a session that
@@ -301,6 +302,16 @@ class Relay:
     async def close(self):
         if self.server is not None:
             self.server.close()
+            # The websocket close timeout starts after its write buffer drains.
+            # A client that stopped reading can prevent that drain indefinitely.
+            # Bound the whole close, then abort only that client's transport.
+            async def close_client(client):
+                try:
+                    await asyncio.wait_for(client.close(1001, "Relay stopping"), 1)
+                except asyncio.TimeoutError:
+                    client.transport.abort()
+
+            await asyncio.gather(*(close_client(client) for client in list(self.clients)))
             await self.server.wait_closed()
         if self.held is not None:
             await self.held.close()
@@ -399,6 +410,11 @@ class HeldConnection:
                 await self.close_upstream()
                 self.relay.status(held=False)
                 return
+            # The remaining client replies cannot create tracked resources.
+            # Their ids are never reused, so unknown late replies can be dropped
+            # without retaining old borrowers' params for the socket's lifetime.
+            self.pending = {wire_id: entry for wire_id, entry in self.pending.items()
+                            if isinstance(entry, asyncio.Future)}
             try:
                 clean = await self.reset()
             except Exception as exc:
@@ -481,6 +497,10 @@ class HeldConnection:
             # a disaster on a shared connection. End this client only.
             await downstream.send(json.dumps({"id": client_id, "result": {}}))
             await downstream.close(1000, "Browser.close ends this client; Chrome stays open")
+            return
+        if len(self.pending) >= MAX_PENDING_CALLS:
+            await downstream.send(json.dumps({"id": client_id, "error": {
+                "code": -32000, "message": "Too many unanswered calls; wait for replies or reconnect"}}))
             return
         browser_level = "sessionId" not in message
         if browser_level:

@@ -37,6 +37,8 @@ cause another prompt. Chrome restart, connection loss, or failed cleanup can
 also require a new approval.
 A client that disconnects with state-changing calls still pending also requires
 a fresh connection, so the next client does not inherit unfinished session state.
+The held connection accepts up to 4,096 unanswered calls. At that limit, new
+calls receive an error; wait for replies or reconnect before sending more work.
 
 ## Select the Chrome directory and port
 

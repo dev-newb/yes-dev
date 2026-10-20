@@ -24,6 +24,13 @@ Status-file reads run separately from helper shutdown, unexpected wait errors
 still trigger owned-process cleanup, and virtual-environment launches use a
 direct child interpreter with the virtual environment's dependencies.
 
+The final resource checks removed retention of unanswered read-only requests
+after a client leaves, limited active unanswered calls to 4,096, and bounded
+shutdown when a downstream client stops reading. Healthy manager checks now
+avoid an extra lifecycle thread. A temporary status-file read failure no longer
+applies the startup timeout to an already-ready helper. Retry delay returns to
+its initial value after 60 seconds of healthy status.
+
 ## 1.5.0 - 2026-10-19
 
 ### Windows: ready-to-run portable ZIP

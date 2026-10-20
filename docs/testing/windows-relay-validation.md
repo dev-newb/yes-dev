@@ -6,7 +6,7 @@ bridge stayed running. The test did not switch the input desktop.
 
 ## Results
 
-- 133 selected Python tests passed with full Windows CPython 3.14.5. These cover
+- 147 selected Python tests passed with full Windows CPython 3.14.5. These cover
   shared transport, held connection cleanup, the launch primer core, Windows
   helper/manager, tray controls, packaging, approval scheduling, speed actions,
   independent launch, and exit records.
@@ -76,7 +76,55 @@ seven original real-client groups passed on the final rerun. The fault tests
 shorten retry delays only on the test manager instance. They do not change app
 defaults. No macOS native run or long-duration soak was performed.
 
-## Scope
+## Final resource and performance round
+
+The final round added 14 tests for resource retention, stalled readers, large
+messages, idle manager work, and recovery after transient status-file failures.
+All 147 selected tests passed. The seven client-library groups and seven live
+fault groups passed again. The rebuilt portable runtime passed native consent
+at all three speeds on separate desktops.
+
+| Check | Before | After |
+| --- | --- | --- |
+| Unanswered read-only calls retained after 12 borrowers | 288 calls; 2,359,296 bytes of test strings | Zero calls and test strings; one upstream still reused |
+| Shutdown with a downstream reader stalled | Exceeded a 3-second measurement bound | 1.080 seconds |
+| Threads created for 500 healthy manager checks | 500 status + 500 lifecycle | 500 status + zero lifecycle |
+| Median time for those 500 checks, three runs | 0.351 seconds | 0.230 seconds |
+
+The thread measurement is a burst control-work benchmark, not an idle CPU
+measurement. Active unanswered calls are capped at 4,096; clients receive a CDP
+error for new calls at that limit. This is not a total process-memory limit.
+
+A separate real Windows host run started before Chrome, then used a fresh
+headless Chrome profile. After 90.89 seconds idle, the same helper resumed and
+completed 300 reconnects through one held upstream. Handle count stayed at 132.
+During idle, helper CPU increased by 0.125 seconds (about 0.14% of one core).
+Private memory was 23,949,312 bytes after idle and 28,176,384 bytes after the load.
+The load also checked valid 1 MiB and 4 MiB replies.
+
+The first packaged native run failed before an approval: its isolated approval
+supervisor exited on `EnumWindows` with `WinError 0`. The relay reported the
+failed Chrome connection. Fresh private-desktop reruns passed at 150, 250, and
+750 ms with the same package. This single native enumeration failure was not
+reproduced or attributed to the relay; it remains in the test evidence.
+
+Two 200-call relay samples had median `Browser.getVersion` round trips of
+0.913–0.951 ms; two direct-Chrome samples had medians of 0.349–0.392 ms. The
+relay adds forwarding overhead. These timings describe this host and run only;
+they are not a claim of improved CDP throughput. Reconnect measurements include
+the test's status polling and should not be treated as connection latency.
+
+Before the readiness fix, the repeated-connection run stopped a healthy helper
+with `relay startup timed out` after a temporary empty status read. The manager
+now records successful startup for the life of that owned helper; a missing
+later status sample does not restart it. A real process exit still triggers
+recovery. The final live run passed without a restart.
+
+These are bounded checks. Ninety seconds idle does not establish overnight
+stability, and the resource snapshots do not prove absence of every possible
+long-term leak. Diagnostic run folders remain retained for troubleshooting.
+
+## Isolation and limits
 
 The native consent tests use fresh profiles, unique approval-engine mutexes,
 owned relay processes, and separate desktops. The headless tests use a fresh
