@@ -4,7 +4,7 @@
 
 ## Portable app
 
-Download [YesDev-1.5.0-windows-x64.zip](https://github.com/dev-newb/yes-dev/releases/download/v1.5.0/YesDev-1.5.0-windows-x64.zip)
+Download [YesDev-1.6.0-windows-x64.zip](https://github.com/dev-newb/yes-dev/releases/download/v1.6.0/YesDev-1.6.0-windows-x64.zip)
 and extract the whole folder to a permanent location. Open `YesDev.exe`.
 Keep `app` and `runtime` beside the launcher. Python, Tcl/Tk, and the app
 dependencies are included. No Python or pip installation is needed.
@@ -12,7 +12,7 @@ dependencies are included. No Python or pip installation is needed.
 The package requires Windows 10/11 x64, the normal desktop Explorer shell,
 Windows PowerShell 5.1, and .NET Framework 4.x. The launcher is unsigned.
 Normal use does not require administrator rights. You can compare the ZIP
-against the release's [SHA256SUMS.txt](https://github.com/dev-newb/yes-dev/releases/download/v1.5.0/SHA256SUMS.txt).
+against the release's [SHA256SUMS.txt](https://github.com/dev-newb/yes-dev/releases/download/v1.6.0/SHA256SUMS.txt).
 The included manifest identifies the source commit and payload files.
 
 Right-click the tray icon and enable **Start at login** if wanted. It creates
@@ -42,10 +42,8 @@ app is running does not make it load the new code.
 ## Source installation
 
 Use a real Windows Python 3.9+ interpreter and Windows PowerShell 5.1. Download
-the [current source ZIP](https://github.com/dev-newb/yes-dev/archive/refs/heads/main.zip)
+the [v1.6.0 source ZIP](https://github.com/dev-newb/yes-dev/archive/refs/tags/v1.6.0.zip)
 or clone the repository, then run these commands from the source folder.
-The [v1.5.0 source ZIP](https://github.com/dev-newb/yes-dev/archive/refs/tags/v1.5.0.zip)
-is a fixed older version and does not include the Windows relay.
 
 ```powershell
 python -m pip install -r requirements.txt
@@ -59,9 +57,8 @@ the old source files; it does not require deleting the user data folder.
 
 ## Keep one Chrome connection open
 
-Current `main` includes an optional relay for sequential Chrome debugging
-clients. The published v1.5.0 portable app does not include it. Use current
-source or a portable build made from `main`.
+Version 1.6.0 includes an optional relay for sequential Chrome debugging
+clients in both the portable app and source package.
 
 1. Enable Chrome remote debugging at `chrome://inspect/#remote-debugging`.
 2. Select **Options > Keep one Chrome connection open** in the tray.
@@ -97,9 +94,8 @@ For a portable-runtime check that does not start the tray or approve anything:
 Read `runtime-check.json` beside the launcher. Keep that check separate from
 approval testing; successful imports do not prove a browser connection.
 
-Version 1.5.0 supports English and Simplified Chinese consent titles and Allow
-labels. The current source keeps that approval behavior and adds the optional
-Windows relay described above.
+Version 1.6.0 supports English and Simplified Chinese consent titles and Allow
+labels, and includes the optional Windows relay described above.
 
 Cloud notices use the primary monitor and have limited multi-monitor/DPI test
 coverage. Overlay positioning does not control dialog matching. See

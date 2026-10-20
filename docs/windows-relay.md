@@ -4,10 +4,9 @@ The Windows relay keeps one approved Chrome debugging connection open. One
 client at a time can use that connection. This reduces repeated approval prompts
 when clients connect in sequence. The feature is off by default.
 
-This feature is merged into `main`. The published Windows v1.5.0 ZIP and v1.5.0
-source ZIP do not include it. Use the
-[current source](https://github.com/dev-newb/yes-dev/archive/refs/heads/main.zip)
-or [build a portable package](../packaging/README.md) from `main`.
+Included in **Windows v1.6.0**. [Download the ready-to-run ZIP](https://github.com/dev-newb/yes-dev/releases/download/v1.6.0/YesDev-1.6.0-windows-x64.zip),
+extract the whole folder, and open `YesDev.exe`. The private runtime and relay
+dependency are included. Older v1.5.0 packages do not include this feature.
 
 [Windows installation](windows.md) | [Troubleshooting](troubleshooting.md)
 

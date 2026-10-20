@@ -83,8 +83,8 @@ controls or relay logs.
 
 ## Windows relay does not connect
 
-- Confirm that you run current source or a package built from it. The v1.5.0
-  release does not include the Windows relay.
+- Confirm that you run v1.6.0 or newer. The v1.5.0 release does not include
+  the Windows relay. [Download and update](windows.md#update-or-switch-installations).
 - Enable **On** and **Options > Keep one Chrome connection open**. Pause and
   Observe only stop the relay.
 - Point the client at the configured relay address, normally
@@ -112,8 +112,7 @@ See [Chrome's debugging-switch change](https://developer.chrome.com/blog/remote-
 Both platforms' held-connection options apply to tools using the configured
 relay address. A tool connecting directly to Chrome can still cause another
 prompt. A second concurrent relay client can also need a separate prompt.
-Fast focus is macOS-only; the Windows relay is in current source and is absent
-from version 1.5.0. See [Windows relay details](windows-relay.md) or
+Fast focus is macOS-only; the Windows relay is included from version 1.6.0. See [Windows relay details](windows-relay.md) or
 [macOS relay details](macos.md#fast-focus-through-the-local-relay-macos-experimental).
 
 The upstream request for persisted approval,

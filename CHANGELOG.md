@@ -5,6 +5,8 @@ measured - the numbers are from this repo's own runs, not estimates.
 
 ## Unreleased
 
+## 1.6.0 - 2026-10-19
+
 ### Windows: optional held Chrome connection
 
 The tray can now own a local CDP relay that keeps one approved Chrome connection

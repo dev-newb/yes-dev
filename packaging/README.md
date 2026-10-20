@@ -5,8 +5,8 @@ Use the Microsoft .NET Framework 4.x C# compiler installed with Windows. This
 release was built with CPython 3.14.5; the manifest records the exact runtime.
 
 ```powershell
-python packaging/build_windows.py --version 1.5.0 --output C:\builds\yesdev-1.5.0
-python packaging/test_portable.py C:\builds\yesdev-1.5.0\YesDev-1.5.0-windows-x64.zip --extract-to "C:\builds\extracted with spaces"
+python packaging/build_windows.py --version 1.6.0 --output C:\builds\yesdev-1.6.0
+python packaging/test_portable.py C:\builds\yesdev-1.6.0\YesDev-1.6.0-windows-x64.zip --extract-to "C:\builds\extracted with spaces"
 ```
 
 Use an explicit real Python executable if `python` is a Windows Store alias.
@@ -27,7 +27,7 @@ bytes; the manifest and checksum identify the exact published package.
 Validate the extracted package's supervisor with real private browsers:
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File tests/run-supervisor-browser-tests.ps1 -Python "C:\builds\extracted with spaces\YesDev-1.5.0-windows-x64\runtime\python.exe" -SourcePath "C:\builds\extracted with spaces\YesDev-1.5.0-windows-x64\app\watcher.ps1" -ResultDirectory C:\builds\browser-results
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File tests/run-supervisor-browser-tests.ps1 -Python "C:\builds\extracted with spaces\YesDev-1.6.0-windows-x64\runtime\python.exe" -SourcePath "C:\builds\extracted with spaces\YesDev-1.6.0-windows-x64\app\watcher.ps1" -ResultDirectory C:\builds\browser-results
 ```
 
 These tests copy the worker/supervisor into private desktops, use fresh profiles,
