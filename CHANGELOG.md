@@ -18,6 +18,12 @@ delay. The approval engine remains separate. The portable build includes the
 relay and websockets 15.0.1. Windows focus restoration and launch-time opening
 are outside this change. See the [Windows relay guide](docs/windows-relay.md).
 
+Adversarial tests hardened close-command decoding and connection cleanup. A
+pending state-changing call or cancelled reset now retires the connection.
+Status-file reads run separately from helper shutdown, unexpected wait errors
+still trigger owned-process cleanup, and virtual-environment launches use a
+direct child interpreter with the virtual environment's dependencies.
+
 ## 1.5.0 - 2026-10-19
 
 ### Windows: ready-to-run portable ZIP

@@ -118,10 +118,21 @@ class PrivateChrome:
             await asyncio.to_thread(self.process.wait, 10)
             raise
         self.launches.append({"pid": self.process.pid, "command": command})
-        await eventually(lambda: self.process.poll() is not None or (self.profile / "DevToolsActivePort").exists(), 20)
+        endpoint = None
+        def ready():
+            nonlocal endpoint
+            if self.process.poll() is not None:
+                return True
+            try:
+                # Chrome may create the file before it has finished writing
+                # and released its Windows sharing lock.
+                endpoint = cdp_relay.read_endpoint(self.profile)
+                return True
+            except (OSError, ValueError):
+                return False
+        await eventually(ready, 20)
         if self.process.poll() is not None:
             raise RuntimeError(f"Private Chrome exited with {self.process.returncode}")
-        endpoint = cdp_relay.read_endpoint(self.profile)
         self.launches[-1]["endpoint"] = endpoint.url
         return endpoint
 

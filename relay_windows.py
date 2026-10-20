@@ -106,6 +106,24 @@ def parent_creation():
     return native.creation(native.kernel.GetCurrentProcess())
 
 
+def child_python():
+    """Use a direct process while retaining a Windows venv's dependencies.
+
+    The Windows venv executable is a redirector: Popen.pid is the redirector,
+    while the host runs under another PID. Use its base executable so status
+    identity and forced shutdown refer to the actual owned host process.
+    """
+    environment = dict(os.environ)
+    executable = sys.executable
+    base = getattr(sys, "_base_executable", None)
+    if sys.platform == "win32" and sys.prefix != sys.base_prefix and base:
+        executable = str(base)
+        packages = str(Path(sys.prefix) / "Lib" / "site-packages")
+        prior = environment.get("PYTHONPATH")
+        environment["PYTHONPATH"] = os.pathsep.join([packages, *([prior] if prior else [])])
+    return executable, environment
+
+
 def stop_reason(path, run_id):
     value = read_json(path)
     if value.get("run_id") == run_id:
@@ -209,8 +227,10 @@ class RelayManager:
         self._config = None
         self._process = None
         self._worker = None
+        self._sampler = None
         self._run_id = None
         self._runtime = None
+        self._state = {}
         self._error = ""
         self._retry_at = 0.0
         self._delay = self.RETRY_MIN
@@ -224,12 +244,45 @@ class RelayManager:
             pass
 
     def _status(self):
-        if self._runtime is None or self._process is None:
+        with self._lock:
+            runtime, process, run_id = self._runtime, self._process, self._run_id
+        return self._read_status(runtime, process, run_id)
+
+    @staticmethod
+    def _read_status(runtime, process, run_id):
+        if runtime is None or process is None:
             return {}
-        state = read_json(self._runtime / "status.json")
-        if state.get("run_id") != self._run_id or state.get("pid") != self._process.pid:
+        state = read_json(runtime / "status.json")
+        if state.get("run_id") != run_id or state.get("pid") != process.pid:
             return {}
         return state
+
+    def _wake_sampler(self):
+        # One status read may be blocked by the filesystem. Keep that read
+        # separate from the worker that owns launch, stop, and escalation.
+        if (self._process is None or self._desired is None or self._config != self._desired
+                or self._sampler is not None):
+            return
+        self._sampler = threading.Thread(
+            target=self._sample_status, args=(self._runtime, self._process, self._run_id),
+            name="YesDev relay status", daemon=True)
+        self._sampler.start()
+
+    def _sample_status(self, runtime, process, run_id):
+        try:
+            state = self._read_status(runtime, process, run_id)
+            with self._lock:
+                # A read from a stopped run must not change a new run's cache.
+                if (self._process is process and self._runtime == runtime
+                        and self._run_id == run_id):
+                    self._state = state
+        except Exception as exc:
+            self._event("Relay status read error: " + str(exc))
+        finally:
+            with self._lock:
+                self._sampler = None
+                if self._process is not process:
+                    self._wake_sampler()
 
     def sync(self, enabled: bool, profile: str, port: int):
         with self._lock:
@@ -264,18 +317,15 @@ class RelayManager:
             self._wake()
 
     def _wake(self):
+        self._wake_sampler()
         if self._worker is not None and self._worker.is_alive():
             return
         if self._desired is None and self._process is None:
             return
         if self._process is None and time.monotonic() < self._retry_at:
             return
-        if (self._process is not None and self._config == self._desired
-                and self._process.poll() is None):
-            state = self._status()
-            if (state.get("state") in ("listening", "error")
-                    or time.monotonic() - self._started < self.START_TIMEOUT):
-                return
+        # Each enabled sync requests a background status sample. Public calls
+        # never open files, including while the helper is still starting.
         self._worker = threading.Thread(target=self._reconcile, name="YesDev relay lifecycle", daemon=True)
         self._worker.start()
 
@@ -301,7 +351,10 @@ class RelayManager:
                 return
             except subprocess.TimeoutExpired:
                 continue
-            except OSError:
+            except Exception as exc:
+                # Even an unexpected wait failure must not skip escalation
+                # and leave the owned child running after disable.
+                self._event("Relay stop wait error: " + str(exc))
                 if process.poll() is not None:
                     return
         raise RuntimeError("Owned relay process did not stop")
@@ -310,12 +363,12 @@ class RelayManager:
         try:
             while True:
                 with self._lock:
+                    state = self._state
                     process = self._process
                     desired = self._desired
                     runtime, run_id = self._runtime, self._run_id
                     reason = self._stop_reason
                     exited = process is not None and process.poll() is not None
-                    state = self._status()
                     timed_out = (process is not None and not exited and desired == self._config
                                  and state.get("state") not in ("listening", "error")
                                  and time.monotonic() - self._started > self.START_TIMEOUT)
@@ -323,6 +376,7 @@ class RelayManager:
                         if desired == self._config:
                             self._failed(state.get("last_error") or f"Relay exited (code {process.returncode})")
                         self._process = self._config = None
+                        self._state = {}
                         process = None
                     must_stop = process is not None and (desired != self._config or timed_out)
                     if timed_out:
@@ -332,6 +386,7 @@ class RelayManager:
                     self._stop_child(process, runtime, run_id, reason)
                     with self._lock:
                         self._process = self._config = None
+                        self._state = {}
                     continue
                 with self._lock:
                     # Recheck desired after stop work; changes can arrive at any time.
@@ -342,7 +397,8 @@ class RelayManager:
                 run_id = str(uuid.uuid4())
                 runtime = self.data_dir / "relay-runs" / run_id
                 runtime.mkdir(parents=True)
-                command = [sys.executable, str(self.root / "relay_windows.py"),
+                executable, environment = child_python()
+                command = [executable, str(self.root / "relay_windows.py"),
                            "--profile", config[0], "--port", str(config[1]),
                            "--status-path", str(runtime / "status.json"),
                            "--log-path", str(self.data_dir / "relay.log"),
@@ -351,12 +407,15 @@ class RelayManager:
                 with (runtime / "stderr.log").open("ab") as stderr:
                     child = subprocess.Popen(command, cwd=self.root, stdin=subprocess.DEVNULL,
                                              stdout=subprocess.DEVNULL, stderr=stderr,
+                                             env=environment,
                                              creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
                 with self._lock:
                     self._process, self._config = child, config
                     self._runtime, self._run_id = runtime, run_id
+                    self._state = {}
                     self._started = time.monotonic()
                     self._error = ""
+                    self._wake_sampler()
                     self._event(f"Relay start: pid={child.pid} run={run_id}")
                     # Check settings once more before leaving the worker.
                     if self._desired == config:
@@ -374,19 +433,23 @@ class RelayManager:
 
     def status_text(self) -> str:
         with self._lock:
+            state = self._state
             if self._error:
                 return "Relay: error - " + self._error
             if self._desired is None:
                 return "Relay: off"
             if self._process is None:
                 return "Relay: starting"
-            state = self._status()
             if state.get("state") == "error":
                 return "Relay: error - " + str(state.get("last_error") or "helper failed")
             if self._process.poll() is not None:
                 return "Relay: error - " + str(state.get("last_error") or "helper exited")
             if state.get("last_error"):
                 return "Relay: error - " + str(state["last_error"])
+            if state.get("state") == "stopped":
+                return "Relay: stopping"
+            if state.get("state") != "listening":
+                return "Relay: starting"
             if state.get("connections", 0):
                 return "Relay: client active"
             held_state = state.get("held_state", "")

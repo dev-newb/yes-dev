@@ -35,6 +35,8 @@ connection open after that client disconnects. A second client that arrives
 while the held connection is busy gets a separate Chrome connection and can
 cause another prompt. Chrome restart, connection loss, or failed cleanup can
 also require a new approval.
+A client that disconnects with state-changing calls still pending also requires
+a fresh connection, so the next client does not inherit unfinished session state.
 
 ## Select the Chrome directory and port
 

@@ -97,10 +97,12 @@ class ManagerTests(unittest.TestCase):
     def settle(self):
         deadline = time.monotonic() + 3
         while True:
-            worker = self.manager._worker
-            if worker is None:
+            with self.manager._lock:
+                threads = [thread for thread in (self.manager._worker, self.manager._sampler) if thread is not None]
+            if not threads:
                 return
-            worker.join(.05)
+            for thread in threads:
+                thread.join(.05)
             if time.monotonic() > deadline:
                 self.fail("Relay lifecycle worker did not finish")
 
@@ -116,6 +118,7 @@ class ManagerTests(unittest.TestCase):
         child = self.children[-1]
         windows.write_json(Path(child.option("--status-path")), dict(
             run_id=child.option("--run-id"), pid=child.pid, **state))
+        self.enable()
 
     def test_unchanged_sync_keeps_one_child_and_status_is_run_bound(self):
         self.assertEqual(self.manager.status_text(), "Relay: off")
@@ -131,6 +134,7 @@ class ManagerTests(unittest.TestCase):
         self.assertEqual(self.manager.status_text(), "Relay: client active")
         path = Path(self.children[0].option("--status-path"))
         windows.write_json(path, dict(run_id="someone-else", pid=77, state="listening"))
+        self.enable()
         self.assertEqual(self.manager.status_text(), "Relay: starting")
 
     def test_config_restart_stops_only_owned_child_and_uses_new_run(self):
@@ -350,7 +354,7 @@ class HostTests(unittest.IsolatedAsyncioTestCase):
             await asyncio.sleep(.3)
             self.assertIsNone(child.poll())
             windows.write_json(stop, dict(run_id=run_id, reason="test owned stop"))
-            final = await self.wait_status(status, lambda s: s.get("state") == "stopped")
+            final = await self.wait_status(status, lambda s: s.get("state") == "stopped" and s.get("exit_reason"))
             self.assertEqual(final["exit_reason"], "test owned stop")
             self.assertEqual(len(closed), 1)
         finally:

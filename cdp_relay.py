@@ -43,8 +43,8 @@ _CLOSE_CODES = (1000, 1001, 1008, 1009, 1011, 1012, 1013)
 
 
 def _is_browser_close(raw):
-    """Browser.close in any frame, parsed only when the text could hold it."""
-    if not isinstance(raw, str) or "Browser.close" not in raw:
+    """Recognize the method after JSON decoding, including escaped/binary JSON."""
+    if not isinstance(raw, (str, bytes)):
         return None
     try:
         message = json.loads(raw)
@@ -386,6 +386,19 @@ class HeldConnection:
         self.generation += 1
         self.reset_done.clear()
         try:
+            # An attach or browser setting can complete after its borrower has
+            # left. There is nothing to reset yet if its reply has not arrived.
+            # Retire instead of exposing a late resource/event to the next owner.
+            unresolved_state = any(
+                isinstance(entry, tuple) and (
+                    entry[2] in {"Target.attachToTarget", "Target.attachToBrowserTarget", "Target.createBrowserContext"}
+                    or (entry[3] is not None and _reset_for(entry[2], entry[3]) is not None))
+                for entry in self.pending.values())
+            if unresolved_state:
+                LOGGER.info("Retiring the held connection: borrower left a state-changing call pending")
+                await self.close_upstream()
+                self.relay.status(held=False)
+                return
             try:
                 clean = await self.reset()
             except Exception as exc:
@@ -398,6 +411,13 @@ class HeldConnection:
                 LOGGER.warning("Retiring the held connection: its reset did not complete")
                 await self.close_upstream()
                 self.relay.status(held=False)
+        except asyncio.CancelledError:
+            # reset_done must never advertise a reusable connection whose
+            # cleanup was interrupted by shutdown or task cancellation.
+            LOGGER.info("Retiring the held connection: borrower cleanup was cancelled")
+            await self.close_upstream()
+            self.relay.status(held=False)
+            raise
         finally:
             self.reset_done.set()
 
@@ -447,7 +467,7 @@ class HeldConnection:
     async def from_client(self, downstream, raw):
         try:
             message = json.loads(raw)
-            if not (isinstance(message, dict) and isinstance(message.get("id"), int)
+            if not (isinstance(message, dict) and type(message.get("id")) is int
                     and isinstance(message.get("method"), str)):
                 raise ValueError
         except (ValueError, TypeError):
@@ -563,11 +583,13 @@ class HeldConnection:
     async def close_upstream(self):
         upstream, reader = self.upstream, self.reader
         self.upstream = self.endpoint = self.reader = None
-        if upstream is not None:
-            await upstream.close()
-        if reader is not None:
-            reader.cancel()
-            await asyncio.gather(reader, return_exceptions=True)
+        try:
+            if upstream is not None:
+                await upstream.close()
+        finally:
+            if reader is not None:
+                reader.cancel()
+                await asyncio.gather(reader, return_exceptions=True)
 
     async def close(self):
         owner = self.owner

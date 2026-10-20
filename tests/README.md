@@ -47,6 +47,21 @@ and `-SourcePath` to its `app\watcher.ps1`.
 
 ## Approval engine and launch checks
 
+For the adversarial relay suite:
+
+```powershell
+python -m unittest discover -s tests -p test_cdp_relay_adversarial.py -v
+python -m unittest discover -s tests -p test_relay_windows_adversarial.py -v
+python tests/windows_relay_adversarial_live.py --output C:\qa\relay-faults.json
+```
+
+The first two suites use loopback fixtures and temporary files. The live fault
+driver uses new headless Chrome profiles and test-owned host processes. It
+checks forced helper failure, 40 rapid setting changes, port recovery, incomplete
+endpoint files, and active-client shutdown. It also verifies that binary and
+escaped close commands leave Chrome running. Retry delays are shortened only
+in that driver. It records its result and confirms owned helpers stopped.
+
 Run these tests with Windows PowerShell 5.1 and Python 3. The tests do not start
 the tray app or the production watcher. They do not change installed app files.
 
