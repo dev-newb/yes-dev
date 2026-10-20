@@ -35,6 +35,7 @@ def main():
             assert hashlib.file_digest(stream, "sha256").hexdigest() == record["sha256"], name
     actual = {path.relative_to(root).as_posix() for path in root.rglob("*") if path.is_file()}
     assert actual == set(manifest["files"]) | {"release-manifest.json"}
+    assert {"app/cdp_relay.py", "app/relay_windows.py"}.issubset(actual)
     assert not any("__pycache__" in name or name.endswith(".pyc") for name in actual)
     assert not any(Path(name).name in ("config.json", "state.json", "credentials.json") for name in actual)
     env = dict(os.environ, PYTHONHOME=str(destination / "bad-home"), PYTHONPATH=str(destination / "bad-path"))
@@ -42,6 +43,7 @@ def main():
     subprocess.run([str(root / "YesDev.exe"), "--check-runtime"], env=env, check=True, timeout=30)
     check = json.loads((root / "runtime-check.json").read_text())
     assert check["passed"] and check["isolated"], check
+    assert check["dependencies"]["websockets"] == "15.0.1", check
     print(json.dumps({"passed": True, "package": str(root), "files_verified": len(manifest["files"]),
                       "commit": manifest["commit"], "python": check["python"], "dependencies": check["dependencies"]}, indent=2))
 

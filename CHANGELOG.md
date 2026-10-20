@@ -5,6 +5,32 @@ measured - the numbers are from this repo's own runs, not estimates.
 
 ## Unreleased
 
+### Windows: optional held Chrome connection
+
+The tray can now own a local CDP relay that keeps one approved Chrome connection
+open for sequential clients. Select **Options → Keep one Chrome connection open**
+and point clients at `http://127.0.0.1:9333`. The option is off by default. A
+concurrent client gets a separate connection and can need another approval.
+
+The helper stops on Off, pause, Observe only, Quit, or tray process exit. It
+records startup, exit, and connection errors and retries failed starts with a
+delay. The approval engine remains separate. The portable build includes the
+relay and websockets 15.0.1. Windows focus restoration and launch-time opening
+are outside this change. See the [Windows relay guide](docs/windows-relay.md).
+
+Adversarial tests hardened close-command decoding and connection cleanup. A
+pending state-changing call or cancelled reset now retires the connection.
+Status-file reads run separately from helper shutdown, unexpected wait errors
+still trigger owned-process cleanup, and virtual-environment launches use a
+direct child interpreter with the virtual environment's dependencies.
+
+The final resource checks removed retention of unanswered read-only requests
+after a client leaves, limited active unanswered calls to 4,096, and bounded
+shutdown when a downstream client stops reading. Healthy manager checks now
+avoid an extra lifecycle thread. A temporary status-file read failure no longer
+applies the startup timeout to an already-ready helper. Retry delay returns to
+its initial value after 60 seconds of healthy status.
+
 ## 1.5.0 - 2026-10-19
 
 ### Windows: ready-to-run portable ZIP

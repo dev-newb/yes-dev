@@ -31,6 +31,7 @@ from websockets.protocol import State
 LOGGER = logging.getLogger("yesdev.relay")
 RELAY_PATH = "/devtools/browser/yesdev"
 MAX_MESSAGE = 64 * 1024 * 1024
+MAX_PENDING_CALLS = 4096  # a stalled Chrome must not retain unlimited client calls
 HOLD_RESET_TIMEOUT = 2.0   # seconds to undo a departed client's state
 HOLD_RESET_ROUNDS = 3      # sessions can attach while the first round runs
 # Cleanup whose failure only means the thing was already gone: a session that
@@ -43,8 +44,8 @@ _CLOSE_CODES = (1000, 1001, 1008, 1009, 1011, 1012, 1013)
 
 
 def _is_browser_close(raw):
-    """Browser.close in any frame, parsed only when the text could hold it."""
-    if not isinstance(raw, str) or "Browser.close" not in raw:
+    """Recognize the method after JSON decoding, including escaped/binary JSON."""
+    if not isinstance(raw, (str, bytes)):
         return None
     try:
         message = json.loads(raw)
@@ -301,6 +302,16 @@ class Relay:
     async def close(self):
         if self.server is not None:
             self.server.close()
+            # The websocket close timeout starts after its write buffer drains.
+            # A client that stopped reading can prevent that drain indefinitely.
+            # Bound the whole close, then abort only that client's transport.
+            async def close_client(client):
+                try:
+                    await asyncio.wait_for(client.close(1001, "Relay stopping"), 1)
+                except asyncio.TimeoutError:
+                    client.transport.abort()
+
+            await asyncio.gather(*(close_client(client) for client in list(self.clients)))
             await self.server.wait_closed()
         if self.held is not None:
             await self.held.close()
@@ -386,6 +397,24 @@ class HeldConnection:
         self.generation += 1
         self.reset_done.clear()
         try:
+            # An attach or browser setting can complete after its borrower has
+            # left. There is nothing to reset yet if its reply has not arrived.
+            # Retire instead of exposing a late resource/event to the next owner.
+            unresolved_state = any(
+                isinstance(entry, tuple) and (
+                    entry[2] in {"Target.attachToTarget", "Target.attachToBrowserTarget", "Target.createBrowserContext"}
+                    or (entry[3] is not None and _reset_for(entry[2], entry[3]) is not None))
+                for entry in self.pending.values())
+            if unresolved_state:
+                LOGGER.info("Retiring the held connection: borrower left a state-changing call pending")
+                await self.close_upstream()
+                self.relay.status(held=False)
+                return
+            # The remaining client replies cannot create tracked resources.
+            # Their ids are never reused, so unknown late replies can be dropped
+            # without retaining old borrowers' params for the socket's lifetime.
+            self.pending = {wire_id: entry for wire_id, entry in self.pending.items()
+                            if isinstance(entry, asyncio.Future)}
             try:
                 clean = await self.reset()
             except Exception as exc:
@@ -398,6 +427,13 @@ class HeldConnection:
                 LOGGER.warning("Retiring the held connection: its reset did not complete")
                 await self.close_upstream()
                 self.relay.status(held=False)
+        except asyncio.CancelledError:
+            # reset_done must never advertise a reusable connection whose
+            # cleanup was interrupted by shutdown or task cancellation.
+            LOGGER.info("Retiring the held connection: borrower cleanup was cancelled")
+            await self.close_upstream()
+            self.relay.status(held=False)
+            raise
         finally:
             self.reset_done.set()
 
@@ -447,7 +483,7 @@ class HeldConnection:
     async def from_client(self, downstream, raw):
         try:
             message = json.loads(raw)
-            if not (isinstance(message, dict) and isinstance(message.get("id"), int)
+            if not (isinstance(message, dict) and type(message.get("id")) is int
                     and isinstance(message.get("method"), str)):
                 raise ValueError
         except (ValueError, TypeError):
@@ -461,6 +497,10 @@ class HeldConnection:
             # a disaster on a shared connection. End this client only.
             await downstream.send(json.dumps({"id": client_id, "result": {}}))
             await downstream.close(1000, "Browser.close ends this client; Chrome stays open")
+            return
+        if len(self.pending) >= MAX_PENDING_CALLS:
+            await downstream.send(json.dumps({"id": client_id, "error": {
+                "code": -32000, "message": "Too many unanswered calls; wait for replies or reconnect"}}))
             return
         browser_level = "sessionId" not in message
         if browser_level:
@@ -563,11 +603,13 @@ class HeldConnection:
     async def close_upstream(self):
         upstream, reader = self.upstream, self.reader
         self.upstream = self.endpoint = self.reader = None
-        if upstream is not None:
-            await upstream.close()
-        if reader is not None:
-            reader.cancel()
-            await asyncio.gather(reader, return_exceptions=True)
+        try:
+            if upstream is not None:
+                await upstream.close()
+        finally:
+            if reader is not None:
+                reader.cancel()
+                await asyncio.gather(reader, return_exceptions=True)
 
     async def close(self):
         owner = self.owner

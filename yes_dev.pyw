@@ -40,6 +40,7 @@ import pystray
 from PIL import Image, ImageDraw
 
 import puffs        # the cloud artwork; the status icon is the app's own cloud
+from relay_windows import RelayManager
 
 APP_NAME = "Yes, Dev"
 APP_SLUG = "yes-dev"
@@ -82,6 +83,10 @@ DEFAULTS = {
     "burst_action": "ask",
     # Minutes to stay armed before disarming automatically; 0 = until turned off.
     "arm_minutes": 0,
+    # Optional browser-level CDP endpoint. Clients must connect to this relay.
+    "relay_hold": False,
+    "relay_profile": str(Path(os.environ.get("LOCALAPPDATA", Path.home())) / "Google" / "Chrome" / "User Data"),
+    "relay_port": 9333,
 }
 
 BURST_WINDOW = 60.0    # seconds
@@ -151,6 +156,16 @@ class Config(dict):
         if self.get("burst_action") not in {"ask", "stop"}:
             self["burst_action"] = DEFAULTS["burst_action"]
 
+        self["relay_hold"] = self.get("relay_hold") is True
+        if not isinstance(self.get("relay_profile"), str) or not self["relay_profile"].strip():
+            self["relay_profile"] = DEFAULTS["relay_profile"]
+            self["relay_hold"] = False
+            log("relay disabled: relay_profile must name Chrome's User Data directory")
+        if type(self.get("relay_port")) is not int or not 1024 <= self["relay_port"] <= 65535:
+            self["relay_port"] = DEFAULTS["relay_port"]
+            self["relay_hold"] = False
+            log("relay disabled: relay_port must be an integer between 1024 and 65535")
+
     def save(self) -> None:
         try:
             DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -177,6 +192,34 @@ class YesDev:
         self._puffs = None            # built on first use; Tk costs a thread
         self.lifecycle = None
         self._reported_engine_exit = None
+        self.relay = RelayManager(BASE, DATA_DIR, log=log)
+        self._relay_status = ""
+        self._relay_error = None
+        self._quitting = False
+
+    def sync_relay(self) -> None:
+        """Relay faults cannot interrupt the independent approval engine."""
+        enabled = (self.cfg["relay_hold"] and self.cfg["enabled"]
+                   and not self.cfg["observe_only"] and not self.paused_reason
+                   and not self._quitting)
+        try:
+            self.relay.sync(bool(enabled), self.cfg["relay_profile"], self.cfg["relay_port"])
+            self._relay_error = None
+            status = self.relay.status_text()
+            if status != self._relay_status:
+                self._relay_status = status
+                self.refresh()
+        except Exception as exc:
+            message = repr(exc)
+            if message != self._relay_error:
+                log(f"relay control error: {message}")
+                self._relay_error = message
+
+    def stop_relay(self, reason: str) -> None:
+        try:
+            self.relay.stop(reason)
+        except Exception as exc:
+            log(f"relay stop error: {exc!r}")
 
     # ---------- engine lifetime ----------
 
@@ -243,7 +286,7 @@ class YesDev:
 
     def monitor(self) -> None:
         log("monitor thread started")
-        while True:
+        while not self._quitting:
             try:
                 self._tick()
             except Exception:
@@ -253,6 +296,8 @@ class YesDev:
 
     def _tick(self) -> None:
         with self._lock:
+            if self._quitting:
+                return
             # A burst pause is a speed bump, not a stop: re-arm on its own so a
             # busy stretch never leaves agents waiting on a human again.
             if self.paused_reason and self.resume_at and datetime.now() >= self.resume_at:
@@ -269,6 +314,7 @@ class YesDev:
                     self._pause("timer expired")
                     self.notify(f"Disarmed after {self.cfg['arm_minutes']} min")
             self._read_log()
+            self.sync_relay()
 
     def _read_log(self) -> None:
         # Binary, not text: UTF-8 logs can have a BOM and CRLF, and byte
@@ -383,6 +429,7 @@ class YesDev:
                           if resume_after else None)
         log(f"PAUSED ({reason})" + (f", auto-resume in {int(resume_after)}s" if resume_after else ""))
         self.stop_engine()
+        self.sync_relay()
         self.refresh()
 
     # ---------- tray plumbing ----------
@@ -472,6 +519,7 @@ class YesDev:
             self.recent.clear()
             self.cfg.save()
             self.start_engine() if self.cfg["enabled"] else self.stop_engine()
+            self.sync_relay()
         self.refresh()
 
     def toggle(self, key: str, restart: bool = False):
@@ -481,6 +529,7 @@ class YesDev:
                 self.cfg.save()
                 if restart:
                     self.restart_engine()
+                self.sync_relay()
             self.refresh()
         return handler
 
@@ -494,6 +543,7 @@ class YesDev:
                     self.disarm_at = datetime.now() + timedelta(minutes=mins) if mins else None
                 if restart:
                     self.restart_engine()
+                self.sync_relay()
             self.refresh()
         return handler
 
@@ -543,7 +593,10 @@ class YesDev:
     def quit(self) -> None:
         if self.lifecycle:
             self.lifecycle.request_exit("tray_quit")
-        self.stop_engine()
+        with self._lock:
+            self._quitting = True
+            self.stop_relay("tray_quit")
+            self.stop_engine()
         if self._puffs:
             self._puffs.shutdown()
         if self.icon:
@@ -586,6 +639,10 @@ class YesDev:
                   for label, val in BURST_ACTIONS],
             )),
             I("Options", M(
+                I("Keep one Chrome connection open",
+                  lambda _: self.toggle("relay_hold")(),
+                  checked=lambda _: self.cfg["relay_hold"]),
+                I(lambda _: self.relay.status_text(), None, enabled=False),
                 I("Observe only (log, don't click)",
                   lambda _: self.toggle("observe_only", restart=True)(),
                   checked=lambda _: self.cfg["observe_only"]),
@@ -595,6 +652,7 @@ class YesDev:
             )),
             M.SEPARATOR,
             I("Open log", self.open_path(LOG_PATH)),
+            I("Open relay log", self.open_path(DATA_DIR / "relay.log")),
             I("Open startup/exit records", self.open_path(DATA_DIR / "lifecycle")),
             I("Open config", self.open_path(CONFIG_PATH)),
             I("Quit", lambda _: self.quit()),
@@ -662,7 +720,10 @@ def main(lifecycle=None) -> int:
         app.run()
     finally:
         if app:
-            app.stop_engine()
+            with app._lock:
+                app._quitting = True
+                app.stop_relay("tray_exit")
+                app.stop_engine()
         if app and app._puffs:
             app._puffs.shutdown()
         kernel.ReleaseMutex(handle)
