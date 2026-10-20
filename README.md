@@ -10,9 +10,9 @@ Yes, Dev answers matching **Allow remote debugging?** prompts so local automatio
 tools can connect without waiting for a manual click. It runs on Windows and
 macOS. Windows has a portable ZIP; macOS uses the Python source app.
 
-**[Download Windows x64 v1.5.0](https://github.com/dev-newb/yes-dev/releases/download/v1.5.0/YesDev-1.5.0-windows-x64.zip)**
-· [Release notes and checksums](https://github.com/dev-newb/yes-dev/releases/tag/v1.5.0)
-· [Source ZIP](https://github.com/dev-newb/yes-dev/archive/refs/tags/v1.5.0.zip)
+**[Download Windows x64 v1.6.0](https://github.com/dev-newb/yes-dev/releases/download/v1.6.0/YesDev-1.6.0-windows-x64.zip)**
+· [Release notes and checksums](https://github.com/dev-newb/yes-dev/releases/tag/v1.6.0)
+· [Source ZIP](https://github.com/dev-newb/yes-dev/archive/refs/tags/v1.6.0.zip)
 
 Auto-approval lets local programs request debugging access to your signed-in
 browser. Yes, Dev matches the consent dialog; it does not identify or authorize
@@ -49,9 +49,9 @@ Grant **Accessibility** to that interpreter in System Settings > Privacy &
 Security > Accessibility. The app's **Accessibility** menu item opens the page.
 Use **Settings…** for configuration. A signed macOS `.app` is not included.
 
-The recorded native tests used macOS 26 and Chrome 152–154. The 1.5.0 Windows
-release includes earlier macOS source fixes; it did not add a new macOS native
-test run. [macOS setup, permissions, and limits](docs/macos.md)
+The recorded native tests used macOS 26 and Chrome 152–154. Version 1.6.0
+includes shared relay fixes tested on Windows; no new macOS native test run
+was performed. [macOS setup, permissions, and limits](docs/macos.md)
 
 ## Main controls
 
@@ -72,10 +72,8 @@ The Windows tray exposes approval settings directly. On macOS, they are in
 
 ### Keep one Chrome connection open on Windows
 
-Current `main` includes an optional Windows relay. **The published v1.5.0 ZIP
-and v1.5.0 source ZIP do not include it.** Use the
-[current source](https://github.com/dev-newb/yes-dev/archive/refs/heads/main.zip)
-or build a portable package from `main`.
+**Windows v1.6.0 includes the relay** in both the ready-to-run ZIP and source
+package. Download the release above, extract it, and start `YesDev.exe`.
 
 Enable **Options > Keep one Chrome connection open**, then point your CDP tool
 at `http://127.0.0.1:9333`. The first client opens the Chrome connection; later
@@ -111,8 +109,8 @@ In **Settings… > Focus & connection**, choose:
   need another connection and prompt.
 
 These options are off by default. Quiet focus and Fast focus remain
-**macOS-only**. Windows connection reuse is in current source, as described
-above, and is absent from v1.5.0. Input can cancel the macOS focus return;
+**macOS-only**. Windows connection reuse is included in v1.6.0, as described
+above. Input can cancel the macOS focus return;
 a brief interruption or Space switch can still occur.
 The relay stays resident while enabled and stops with the app, a pause, or
 Observe mode. It is an app-managed helper, not a separate system service.

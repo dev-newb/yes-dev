@@ -263,8 +263,8 @@ in the data directory.
 
 The Windows package contains the files listed by `packaging/build_windows.py`.
 The build and extraction checks are described in [packaging](../packaging/README.md).
-Current builds include the Windows relay modules and websockets. The published
-v1.5.0 Windows package predates that feature.
+Windows v1.6.0 includes the relay modules and websockets. The older v1.5.0
+Windows package predates that feature.
 
 ## Standalone observation
 
