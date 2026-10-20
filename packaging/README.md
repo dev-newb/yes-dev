@@ -39,3 +39,16 @@ Create the final ZIP only after release commits are merged. Tag that exact commi
 and publish the ZIP, `SHA256SUMS.txt`, and a source ZIP generated with `git archive`
 from the same commit. Verify the downloaded asset checksum after publication.
 The current runtime and user configuration must not be copied into the package.
+
+The Windows relay uses the shared `cdp_relay.py` core and the `relay_windows.py`
+host. Both files and `websockets==15.0.1` are included in new builds. The portable
+runtime check imports both relay modules and the websockets asyncio client and
+server APIs, then checks all dependency versions against the package pins. It
+does not start the relay, tray, or a browser. The relay is off by default; the
+portable README gives the opt-in steps and the Chrome User Data path setting.
+
+Run the non-native package checks before building:
+
+```powershell
+python -m unittest discover -s tests -p test_windows_relay_packaging.py
+```

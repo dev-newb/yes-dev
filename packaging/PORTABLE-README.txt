@@ -24,8 +24,32 @@ as a source installation. Quit the previous copy before switching installations.
 Use "Open startup/exit records" for lifecycle diagnostics. A record can give the
 exit code and last heartbeat; it cannot always identify an external terminator.
 
+Optional local Chrome relay
+
+"Keep one Chrome connection open" is off by default. Enable it in the tray menu
+to use the local relay. It runs while Yes, Dev is enabled and is not paused or in
+observe mode. CDP clients must connect through http://127.0.0.1:9333, or use the
+WebSocket URL returned by that address. Direct Chrome connections do not use the
+relay. Only local clients can connect.
+
+The relay reads Chrome's DevToolsActivePort file from the Chrome User Data
+directory. The default is %LOCALAPPDATA%\Google\Chrome\User Data. For another
+directory, quit Yes, Dev, set "relay_profile" in %LOCALAPPDATA%\YesDev\config.json
+to that User Data directory, then start Yes, Dev. Use the User Data root, not a
+profile subfolder such as Default. Use JSON path escapes (\\) for backslashes.
+Chrome must expose its DevToolsActivePort file for that directory. The relay does
+not start Chrome or change Chrome settings. Set "relay_port" in the same config
+file if port 9333 is already in use; point clients at the selected port.
+
+The first client request opens the held Chrome connection. The relay keeps that
+socket for sequential client sessions. A concurrent client uses its own Chrome
+socket. Chrome can still ask for permission. The relay does not restore Windows
+focus after a permission prompt. Use the relay status row and "Open relay log"
+in the tray menu to inspect its state.
+
 For a runtime-only check, run YesDev.exe --check-runtime. It writes
 runtime-check.json in this folder without starting the tray or approving prompts.
+The check imports the relay and validates the pinned websockets version.
 
 release-manifest.json records the source commit, dependency versions, and file
 hashes. SHA256SUMS.txt is distributed beside the ZIP. The ZIP includes Python and

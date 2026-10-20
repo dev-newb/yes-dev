@@ -22,6 +22,10 @@ from stopping other prompts, starts independently of a tool such as Codex, and
 records startup and exit diagnostics. Chrome and Edge owners are checked by
 current PID. See the [changelog](CHANGELOG.md) for the included source changes.
 
+**Windows development:** an optional [held Chrome connection relay](docs/windows-relay.md)
+is available in the source branch. It is off by default and requires clients to
+use the relay URL. The published v1.5.0 ZIP does not include this feature.
+
 [Download the source ZIP](https://github.com/dev-newb/yes-dev/archive/refs/tags/v1.5.0.zip)
 for a Python installation or macOS. The portable binary is Windows-only. This
 release includes the previously merged macOS source fixes; no new macOS native

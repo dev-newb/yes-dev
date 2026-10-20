@@ -8,6 +8,8 @@ Pillow 12.2.0 - MIT-CMU and included component notices.
   https://python-pillow.org/
 six 1.17.0 - MIT.
   https://github.com/benjaminp/six
+websockets 15.0.1 - BSD-3-Clause.
+  https://github.com/python-websockets/websockets
 
 Package license texts are retained in runtime/Lib/site-packages/*.dist-info and
 copied to licenses/. CPython's DLLs and Tcl/Tk files are distributed with the
