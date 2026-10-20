@@ -4,8 +4,12 @@ The Windows relay keeps one approved Chrome debugging connection open. One
 client at a time can use that connection. This reduces repeated approval prompts
 when clients connect in sequence. The feature is off by default.
 
-This feature is in development. The published Windows v1.5.0 ZIP does not include
-it. Use a build from the Windows relay PR until a release includes the feature.
+This feature is merged into `main`. The published Windows v1.5.0 ZIP and v1.5.0
+source ZIP do not include it. Use the
+[current source](https://github.com/dev-newb/yes-dev/archive/refs/heads/main.zip)
+or [build a portable package](../packaging/README.md) from `main`.
+
+[Windows installation](windows.md) | [Troubleshooting](troubleshooting.md)
 
 ## Set up
 
