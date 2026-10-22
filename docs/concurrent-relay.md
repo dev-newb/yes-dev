@@ -26,8 +26,9 @@ Use the User Data root that contains `DevToolsActivePort`, not `Default` or
 
 The first client opens the upstream connection. Later clients share it, even
 when other clients are active. Browser restart, upstream loss, relay restart,
-or a cleanup failure can require a new approval. There is no fallback that
-opens an extra upstream connection for a concurrent client.
+or a cleanup failure can require a new approval. A session-attachment timeout
+also closes that browser connection, so its clients must reconnect. There is no
+fallback that opens an extra upstream connection for a concurrent client.
 
 To change directories or ports, quit Yes, Dev and edit these keys in
 `%LOCALAPPDATA%\YesDev\config.json`. Preserve the other settings, then start the
@@ -132,18 +133,21 @@ sessions (`flatten: true`) for attach and auto-attach commands.
   subscriptions are separate for each client.
 - Tabs and page contents remain shared. Clients can navigate or close the same
   tab. Assign separate tabs to agents to avoid conflicting edits. This is not
-  a security boundary between clients or other local applications.
+  a security boundary between clients or other local applications. Cookies and
+  cache are shared within each browser context.
 - Disconnect detaches the client's sessions and disposes contexts it created.
   `disposeOnDetach` is always enabled for new contexts. Tabs created in the
   shared default context remain open. Page edits are not undone.
 - `Browser.close` disconnects only that client. Use browser controls to exit
   Chrome or Edge.
-- Browser-wide changes, including default-context downloads and permissions,
-  are rejected. Download and permission commands are allowed for a context
-  created by the calling client. `Tracing`, `Security`, and `SystemInfo`
+- Browser commands that change shared settings, including default-context
+  downloads and permissions, are rejected. Download and permission commands
+  are allowed for a context created by the calling client. `Tracing`, `Security`, and `SystemInfo`
   commands require a direct connection. Legacy nested-message transport,
   extra browser-target attachment, remote locations, and protocol exposure
-  are also rejected. A rejected command returns a CDP error.
+  are also rejected. The deprecated `Page.setDownloadBehavior` command is
+  rejected; use `Browser.setDownloadBehavior` with an owned context instead.
+  A rejected command returns a CDP error.
 - A browser must support `Target.attachToBrowserTarget`. If it does not, the
   client fails with an error. The relay does not open another browser socket.
 - Each browser supports up to 16 clients, 256 unanswered calls per client,

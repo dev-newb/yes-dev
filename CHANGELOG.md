@@ -17,7 +17,12 @@ Browser-wide changes that can interfere with other clients are rejected.
 Playwright connections need `noDefaults: true`. Shared tabs remain shared;
 page edits are not undone. `Browser.close` disconnects only its caller.
 
-The isolated Windows run passed 164 regression tests. Native Chrome and Edge
+Additional fault and load tests found and fixed a legacy download-command
+bypass, retained IDs after context disposal, and cleanup after a timed-out
+browser-session attachment. The load test also covers pipelined replies,
+reconnects, stalled clients, nested workers, and cross-origin iframe sessions.
+
+The isolated Windows run passed 170 regression tests. Native Chrome and Edge
 each needed one approval for three concurrent clients. Four independent Chrome
 DevTools MCP servers also passed together with one upstream per browser.
 See the [setup and routing guide](docs/concurrent-relay.md) and

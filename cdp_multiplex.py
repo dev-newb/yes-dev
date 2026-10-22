@@ -71,7 +71,8 @@ class MultiplexRelay(Relay):
             # Retain reply routing only, not a potentially large command body.
             original = {key: original[key] for key in ("id", "sessionId") if key in original}
         future = asyncio.get_running_loop().create_future() if client is None else None
-        self.pending[wire_id] = (client, original, method, future)
+        disposed_context = params.get("browserContextId") if method == "Target.disposeBrowserContext" else None
+        self.pending[wire_id] = (client, original, method, future, disposed_context)
         message = dict(id=wire_id, method=method, params=params)
         if session:
             message["sessionId"] = session
@@ -120,7 +121,7 @@ class MultiplexRelay(Relay):
                     pending = self.pending.pop(message["id"], None)
                     if pending is None:
                         continue
-                    client, original, method, future = pending
+                    client, original, method, future, disposed_context = pending
                     if future is not None:
                         if not future.done():
                             future.set_result(message)
@@ -131,6 +132,8 @@ class MultiplexRelay(Relay):
                         self.owners[result["sessionId"]] = owner
                     if method == "Target.createBrowserContext" and "browserContextId" in result:
                         owner.contexts.add(result["browserContextId"])
+                    if method == "Target.disposeBrowserContext" and "error" not in message:
+                        owner.contexts.discard(disposed_context)
                     message["id"] = original["id"]
                     if "sessionId" in original:
                         message["sessionId"] = original["sessionId"]
@@ -155,7 +158,7 @@ class MultiplexRelay(Relay):
             for client in set(self.owners.values()):
                 client.active = False
                 client.ws.transport.abort()
-            for _, _, _, future in self.pending.values():
+            for _, _, _, future, _ in self.pending.values():
                 if future is not None and not future.done():
                     future.set_exception(RuntimeError("Browser connection ended"))
             self.pending.clear()
@@ -172,6 +175,8 @@ class MultiplexRelay(Relay):
         if method in {"Target.attachToBrowserTarget", "Target.exposeDevToolsProtocol",
                       "Target.sendMessageToTarget", "Target.setRemoteLocations"}:
             return "Command is not supported by the shared relay"
+        if method == "Page.setDownloadBehavior":
+            return "Use Browser.setDownloadBehavior with a context created by this client"
         if method in {"Target.attachToTarget", "Target.setAutoAttach"} and params.get("flatten") is not True:
             return "The shared relay requires flatten=true"
         if method == "Target.detachFromTarget" and (self.owners.get(params.get("sessionId")) is not client
@@ -257,7 +262,15 @@ class MultiplexRelay(Relay):
             await self.ensure_upstream()
             # Serialize attachment with other attachment/retirement work.
             async with self.lock:
-                result = await self.send_call("Target.attachToBrowserTarget", {})
+                try:
+                    result = await self.send_call("Target.attachToBrowserTarget", {})
+                except (TimeoutError, asyncio.CancelledError) as exc:
+                    # The browser may have created a session whose reply never
+                    # arrived. Its unknown ID cannot be detached individually.
+                    await self.retire()
+                    if isinstance(exc, TimeoutError):
+                        raise RuntimeError("Browser session attachment timed out; shared connection retired") from exc
+                    raise
                 client.root = result["sessionId"]
                 client.upstream = self.upstream
                 self.owners[client.root] = client

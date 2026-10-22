@@ -8,7 +8,7 @@ consent tests used private Windows desktops without switching the input desktop.
 
 | Check | Result |
 | --- | --- |
-| Windows regression set | 164 tests passed |
+| Windows regression set | 170 tests passed |
 | Chrome 155.0.8059.85 | Concurrent raw CDP, Playwright, and Puppeteer passed with one upstream |
 | Edge 155.0.4283.62 | Concurrent raw CDP, Playwright, and Puppeteer passed with one upstream |
 | Both browsers running together | Separate relays worked at the same time |
@@ -30,6 +30,35 @@ traffic, slow-client queue limits, upstream failure, cleanup failure, and
 reconnect cleanup across connection generations. Host, tray, packaging,
 approval-supervisor, launch-primer, and lifecycle regression tests also passed.
 
+## Additional fault and load checks
+
+The second pass found and fixed three bugs:
+
+- `Page.setDownloadBehavior` bypassed the shared download-settings check.
+  Private Chrome and Edge both accepted the command before the fix. It is now
+  rejected; the caller can use the browser command with its own context.
+- Disposed context IDs stayed in the client's ownership set. The private
+  browser probes retained 20 IDs after 20 disposals. Both browsers now complete
+  100 create/dispose cycles with zero disposed IDs retained. Failed disposal
+  keeps the ID until a successful retry.
+- If a browser-session attachment reply was lost, the relay timed out without
+  closing the shared socket. An unknown session could remain attached. The
+  scripted-browser test now verifies that timeout retires the connection and
+  tells clients to reconnect. Shutdown during attachment is also bounded.
+
+The added live load test passed on Chrome and Edge together, with one upstream
+connection per browser throughout. It checked 1,280 pipelined page commands with
+replies returned out of order, 600 downstream reconnects, 200 context disposals,
+the 16-client limit, and a client that stopped reading. A separate boundary test
+filled all 4,096 pending-call slots and disconnected one client; the other
+clients kept their original upstream connection.
+
+With `--site-per-process`, two clients per browser also received their own
+sessions for a worker, a nested worker, and a cross-origin iframe. Foreign
+worker session IDs were rejected. A paused page loaded after one debugger
+client disconnected and the other resumed it. The four-server MCP check was
+repeated after the fixes and passed.
+
 ## Run the checks again
 
 Use a full Windows Python interpreter for lifecycle tests. Install the pinned
@@ -49,7 +78,7 @@ tests macOS settings and POSIX file permissions and is outside this Windows
 run. No native macOS validation was performed. Initial runs through a virtual
 environment's Windows Python redirector timed out in lifecycle fixtures; the
 full-interpreter run above passed. A broad exploratory discovery run was stopped;
-the final 164-test run completed in about 49 seconds. The launch-primer tests
+the final 170-test run completed in about 98 seconds. The launch-primer tests
 also passed separately on both the original release source and the new source.
 
 The live library tests used Playwright 1.62.1 and Puppeteer Core 25.14.0.
@@ -64,6 +93,9 @@ Install those clients in separate QA directories, then run:
 & 'C:\QA\venv\Scripts\python.exe' tests/windows_multiplex_mcp.py `
   --output C:/QA/multiplex-mcp.json --node C:/node/node.exe `
   --mcp-bin C:/QA/mcp/node_modules/chrome-devtools-mcp/build/src/bin/chrome-devtools-mcp.js
+
+& 'C:\QA\venv\Scripts\python.exe' tests/windows_multiplex_stress.py `
+  --output C:/QA/multiplex-stress.json
 ```
 
 For each native consent run, create a new output directory containing this

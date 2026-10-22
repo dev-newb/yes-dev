@@ -115,8 +115,9 @@ class ChildJob:
 
 
 class PrivateChrome:
-    def __init__(self, executable):
+    def __init__(self, executable, extra_args=()):
         self.executable = executable
+        self.extra_args = tuple(extra_args)
         self.temp = tempfile.TemporaryDirectory(prefix="yesdev-windows-relay-live-")
         self.profile = Path(self.temp.name)
         self.process = self.job = None
@@ -126,7 +127,7 @@ class PrivateChrome:
         (self.profile / "DevToolsActivePort").unlink(missing_ok=True)
         command = [str(self.executable), f"--user-data-dir={self.profile}", "--headless=new",
                    "--remote-debugging-port=0", "--no-first-run", "--no-default-browser-check",
-                   "--disable-background-networking", "about:blank"]
+                   "--disable-background-networking", *self.extra_args, "about:blank"]
         # Assign the job before the browser can create children. In particular,
         # Edge may immediately relaunch and exit its original process.
         self.process = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,

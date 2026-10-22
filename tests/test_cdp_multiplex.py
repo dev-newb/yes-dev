@@ -71,6 +71,58 @@ class MultiplexTests(HeldRelayFixture):
         self.assertIn("result", await self.call(a, "Browser.setDownloadBehavior",
                                                {"browserContextId": context, "behavior": "deny"}))
 
+    async def test_disposed_contexts_are_removed_from_ownership(self):
+        a = await self.client()
+        context = (await self.call(a, "Target.createBrowserContext"))["result"]["browserContextId"]
+        owner = next(iter(self.relay.owners.values()))
+        self.assertIn(context, owner.contexts)
+        self.assertIn("result", await self.call(a, "Target.disposeBrowserContext", {"browserContextId": context}))
+        self.assertNotIn(context, owner.contexts)
+
+    async def test_failed_context_disposal_keeps_ownership_until_retry(self):
+        a = await self.client()
+        context = (await self.call(a, "Target.createBrowserContext"))["result"]["browserContextId"]
+        owner = next(iter(self.relay.owners.values()))
+        self.chrome.refuse = lambda m, p: {"code": -1, "message": "retry"} if m == "Target.disposeBrowserContext" else None
+        self.assertIn("error", await self.call(a, "Target.disposeBrowserContext", {"browserContextId": context}))
+        self.assertIn(context, owner.contexts)
+        self.chrome.refuse = lambda m, p: None
+        self.assertIn("result", await self.call(a, "Target.disposeBrowserContext", {"browserContextId": context}))
+        self.assertNotIn(context, owner.contexts)
+
+    async def test_legacy_download_command_cannot_change_shared_default(self):
+        a = await self.client()
+        session = (await self.call(a, "Target.attachToTarget", {"targetId": "page", "flatten": True}))["result"]["sessionId"]
+        reply = await self.call(a, "Page.setDownloadBehavior", {"behavior": "deny"}, session=session)
+        self.assertIn("error", reply)
+        self.assertNotIn("Page.setDownloadBehavior", [m for _, m, _ in self.chrome.received])
+
+    async def test_timed_out_browser_attachment_retires_unknown_session(self):
+        a = await self.client()
+        await self.call(a, "Test.echo")
+        # The browser may have allocated the session even when its reply is
+        # lost. Without its ID, closing only the new client cannot detach it.
+        self.chrome.ignore = lambda m, p: m == "Target.attachToBrowserTarget"
+        b = await self.client()
+        await asyncio.wait_for(b.wait_closed(), 7)
+        self.assertEqual(b.close_code, 1011)
+        self.assertIsNone(self.relay.upstream)
+        self.assertTrue(any("attachment timed out" in status.get("last_error", "") for status in self.statuses))
+        await asyncio.wait_for(a.wait_closed(), 2)
+
+    async def test_shutdown_during_browser_attachment_is_bounded(self):
+        a = await self.client()
+        await self.call(a, "Test.echo")
+        self.chrome.ignore = lambda m, p: m == "Target.attachToBrowserTarget"
+        b = await self.client()
+        await self.eventually(lambda: any(pending[2] == "Target.attachToBrowserTarget"
+                                         for pending in self.relay.pending.values()))
+        await asyncio.wait_for(self.relay.close(), 2)
+        await asyncio.wait_for(asyncio.gather(a.wait_closed(), b.wait_closed()), 2)
+        self.assertFalse(self.relay.pending)
+        self.assertFalse(self.relay.owners)
+        self.assertFalse(self.relay.clients)
+
     async def test_browser_close_disconnects_only_its_client(self):
         a, b = await self.client(), await self.client()
         await self.call(a, "Test.echo")
@@ -145,6 +197,29 @@ class MultiplexTests(HeldRelayFixture):
         self.assertEqual(reply["id"], 256)
         self.assertIn("error", reply)
         self.assertIn("result", await self.call(b, "Test.echo"))
+
+    async def test_disconnect_at_full_global_call_budget_keeps_other_clients(self):
+        clients = [await self.client() for _ in range(16)]
+        for ws in clients:
+            await self.call(ws, "Test.echo")
+        self.chrome.ignore = lambda m, p: m == "Test.stall"
+        async def fill(ws):
+            for number in range(256):
+                await ws.send(json.dumps(dict(id=number, method="Test.stall")))
+        await asyncio.gather(*(fill(ws) for ws in clients))
+        await self.eventually(lambda: len(self.relay.pending) == 4096, seconds=15)
+        await clients[0].close()
+        await self.eventually(lambda: len(self.relay.clients) == 15)
+        self.assertEqual(self.chrome.connections, 1)
+        self.assertEqual(len(self.relay.pending), 15 * 256)
+        # Free one slot for a remaining client, then verify that it can still
+        # make a round trip on the original upstream connection.
+        wire, pending = next(iter(self.relay.pending.items()))
+        survivor = pending[0].ws
+        await self.chrome.sockets[0].send(json.dumps(dict(id=wire, result={})))
+        local = next(ws for ws in clients if ws.local_address[1] == survivor.remote_address[1])
+        await asyncio.wait_for(local.recv(), 2)
+        self.assertIn("result", await self.call(local, "Test.echo"))
 
     async def test_slow_client_queue_is_bounded(self):
         ws = Mock()
