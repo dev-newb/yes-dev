@@ -57,6 +57,9 @@ the old source files; it does not require deleting the user data folder.
 
 ## Keep one Chrome connection open
 
+Current source adds [concurrent Chrome and Edge sharing](concurrent-relay.md).
+The instructions below describe the published v1.6.0 release.
+
 Version 1.6.0 includes an optional relay for sequential Chrome debugging
 clients in both the portable app and source package.
 

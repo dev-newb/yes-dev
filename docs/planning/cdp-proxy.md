@@ -1,11 +1,11 @@
-# Plan: a local CDP proxy, so Chrome never prompts after the first connection
+# Original plan: share an approved CDP connection
 
-> Planning document for a persistent, multiplexed proxy. The separate thin relay
-> (`cdp_relay.py`, `relay_mac.py`) opens one upstream per client and implements
-> an early-focus handshake; it does not implement the shared socket described
-> here. This plan exists because the only way to
-> stop Chrome taking focus for a remote-debugging consent prompt, without
-> modifying Chrome, is to stop the prompt from happening, and this is how.
+> Historical design notes. Windows current source implements concurrent sharing
+> in `cdp_multiplex.py`, using one browser-target session per client. See the
+> [implemented behavior and limits](../concurrent-relay.md). The original manual
+> discovery-merging design below is not the implementation. macOS still uses
+> the existing held-connection relay. A restart, connection loss, or cleanup
+> failure can require another approval; sharing does not prevent all prompts.
 
 ## The problem it solves
 

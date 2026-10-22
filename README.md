@@ -72,6 +72,11 @@ The Windows tray exposes approval settings directly. On macOS, they are in
 
 ### Keep one Chrome connection open on Windows
 
+**Current source:** [concurrent Chrome and Edge sharing](docs/concurrent-relay.md)
+uses one upstream connection per browser for several clients at once. It adds
+an independent Edge option and Claude/Codex routing instructions. This change
+is not in the published v1.6.0 ZIP. The following describes that release.
+
 **Windows v1.6.0 includes the relay** in both the ready-to-run ZIP and source
 package. Download the release above, extract it, and start `YesDev.exe`.
 

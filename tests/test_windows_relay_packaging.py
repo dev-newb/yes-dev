@@ -19,7 +19,7 @@ def load_packaging_module(name):
 class RelayPackagingTests(unittest.TestCase):
     def test_portable_app_includes_shared_core_and_windows_host(self):
         build = load_packaging_module("build_windows")
-        self.assertTrue({"cdp_relay.py", "relay_windows.py"}.issubset(build.APP_FILES))
+        self.assertTrue({"cdp_relay.py", "cdp_multiplex.py", "relay_windows.py"}.issubset(build.APP_FILES))
         self.assertEqual(len(build.APP_FILES), len(set(build.APP_FILES)))
         for name in build.APP_FILES:
             self.assertTrue((REPO / name).is_file(), name)
@@ -43,7 +43,7 @@ class RelayPackagingTests(unittest.TestCase):
         tree = ast.parse((REPO / "packaging/verify_runtime.py").read_text())
         imports = {alias.name for node in ast.walk(tree) if isinstance(node, ast.Import) for alias in node.names}
         from_imports = {node.module for node in ast.walk(tree) if isinstance(node, ast.ImportFrom)}
-        self.assertTrue({"cdp_relay", "relay_windows"}.issubset(imports))
+        self.assertTrue({"cdp_relay", "cdp_multiplex", "relay_windows"}.issubset(imports))
         self.assertTrue({"websockets.asyncio.client", "websockets.asyncio.server"}.issubset(from_imports))
 
     def test_source_installs_websockets_on_windows_and_macos(self):
