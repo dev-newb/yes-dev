@@ -131,7 +131,7 @@ class ManagerTests(unittest.TestCase):
         self.publish(state="listening", held_state="held", held=True)
         self.assertEqual(self.manager.status_text(), "Relay: held")
         self.publish(state="listening", connections=1)
-        self.assertEqual(self.manager.status_text(), "Relay: client active")
+        self.assertEqual(self.manager.status_text(), "Relay: 1 client(s) active")
         path = Path(self.children[0].option("--status-path"))
         windows.write_json(path, dict(run_id="someone-else", pid=77, state="listening"))
         self.enable()

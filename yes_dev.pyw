@@ -87,6 +87,9 @@ DEFAULTS = {
     "relay_hold": False,
     "relay_profile": str(Path(os.environ.get("LOCALAPPDATA", Path.home())) / "Google" / "Chrome" / "User Data"),
     "relay_port": 9333,
+    "edge_relay_hold": False,
+    "edge_relay_profile": str(Path(os.environ.get("LOCALAPPDATA", Path.home())) / "Microsoft" / "Edge" / "User Data"),
+    "edge_relay_port": 9334,
 }
 
 BURST_WINDOW = 60.0    # seconds
@@ -165,6 +168,20 @@ class Config(dict):
             self["relay_port"] = DEFAULTS["relay_port"]
             self["relay_hold"] = False
             log("relay disabled: relay_port must be an integer between 1024 and 65535")
+        self["edge_relay_hold"] = self.get("edge_relay_hold") is True
+        if (not isinstance(self.get("edge_relay_profile"), str)
+                or not self["edge_relay_profile"].strip()):
+            self["edge_relay_profile"] = DEFAULTS["edge_relay_profile"]
+            self["edge_relay_hold"] = False
+            log("Edge relay disabled: invalid User Data directory")
+        if (type(self.get("edge_relay_port")) is not int
+                or not 1024 <= self["edge_relay_port"] <= 65535):
+            self["edge_relay_port"] = DEFAULTS["edge_relay_port"]
+            self["edge_relay_hold"] = False
+            log("Edge relay disabled: invalid port")
+        if self["relay_hold"] and self["edge_relay_hold"] and self["relay_port"] == self["edge_relay_port"]:
+            self["edge_relay_hold"] = False
+            log("Edge relay disabled: Chrome and Edge must use separate ports")
 
     def save(self) -> None:
         try:
@@ -192,34 +209,47 @@ class YesDev:
         self._puffs = None            # built on first use; Tk costs a thread
         self.lifecycle = None
         self._reported_engine_exit = None
-        self.relay = RelayManager(BASE, DATA_DIR, log=log)
+        self.relay = RelayManager(BASE, DATA_DIR, log=log, multiplex=True)
+        self.edge_relay = RelayManager(BASE, DATA_DIR / "edge-relay", log=log, multiplex=True)
         self._relay_status = ""
         self._relay_error = None
         self._quitting = False
 
     def sync_relay(self) -> None:
         """Relay faults cannot interrupt the independent approval engine."""
-        enabled = (self.cfg["relay_hold"] and self.cfg["enabled"]
+        enabled = (self.cfg["enabled"]
                    and not self.cfg["observe_only"] and not self.paused_reason
                    and not self._quitting)
-        try:
-            self.relay.sync(bool(enabled), self.cfg["relay_profile"], self.cfg["relay_port"])
-            self._relay_error = None
-            status = self.relay.status_text()
-            if status != self._relay_status:
-                self._relay_status = status
+        errors = []
+        statuses = []
+        for manager, prefix in ((self.relay, ""), (self.edge_relay, "edge_")):
+            try:
+                active = enabled and self.cfg[prefix + "relay_hold"]
+                if prefix and self.cfg["relay_hold"] and self.cfg["relay_port"] == self.cfg["edge_relay_port"]:
+                    active = False
+                manager.sync(bool(active), self.cfg[prefix + "relay_profile"], self.cfg[prefix + "relay_port"])
+                statuses.append(manager.status_text())
+            except Exception as exc:
+                errors.append(f"{prefix}relay control error: {exc!r}")
+                statuses.append("Relay: error")
+        status = tuple(statuses)
+        if status != self._relay_status:
+            self._relay_status = status
+            try:
                 self.refresh()
-        except Exception as exc:
-            message = repr(exc)
-            if message != self._relay_error:
-                log(f"relay control error: {message}")
-                self._relay_error = message
+            except Exception as exc:
+                errors.append(f"relay menu error: {exc!r}")
+        message = "; ".join(errors)
+        if message and message != self._relay_error:
+            log(message)
+        self._relay_error = message
 
     def stop_relay(self, reason: str) -> None:
-        try:
-            self.relay.stop(reason)
-        except Exception as exc:
-            log(f"relay stop error: {exc!r}")
+        for manager in (self.relay, self.edge_relay):
+            try:
+                manager.stop(reason)
+            except Exception as exc:
+                log(f"relay stop error: {exc!r}")
 
     # ---------- engine lifetime ----------
 
@@ -642,7 +672,11 @@ class YesDev:
                 I("Keep one Chrome connection open",
                   lambda _: self.toggle("relay_hold")(),
                   checked=lambda _: self.cfg["relay_hold"]),
-                I(lambda _: self.relay.status_text(), None, enabled=False),
+                I(lambda _: "Chrome " + self.relay.status_text(), None, enabled=False),
+                I("Keep one Edge connection open",
+                  lambda _: self.toggle("edge_relay_hold")(),
+                  checked=lambda _: self.cfg["edge_relay_hold"]),
+                I(lambda _: "Edge " + self.edge_relay.status_text(), None, enabled=False),
                 I("Observe only (log, don't click)",
                   lambda _: self.toggle("observe_only", restart=True)(),
                   checked=lambda _: self.cfg["observe_only"]),
@@ -653,6 +687,7 @@ class YesDev:
             M.SEPARATOR,
             I("Open log", self.open_path(LOG_PATH)),
             I("Open relay log", self.open_path(DATA_DIR / "relay.log")),
+            I("Open Edge relay log", self.open_path(DATA_DIR / "edge-relay" / "relay.log")),
             I("Open startup/exit records", self.open_path(DATA_DIR / "lifecycle")),
             I("Open config", self.open_path(CONFIG_PATH)),
             I("Quit", lambda _: self.quit()),

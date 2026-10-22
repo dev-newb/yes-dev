@@ -111,7 +111,10 @@ See [Chrome's debugging-switch change](https://developer.chrome.com/blog/remote-
 
 Both platforms' held-connection options apply to tools using the configured
 relay address. A tool connecting directly to Chrome can still cause another
-prompt. A second concurrent relay client can also need a separate prompt.
+prompt. In Windows v1.6.0 and macOS held mode, a second concurrent relay client
+can also need a separate prompt. Current Windows source supports
+[concurrent Chrome and Edge sharing](concurrent-relay.md); clients on the same
+relay port share one upstream connection while it remains healthy.
 Fast focus is macOS-only; the Windows relay is included from version 1.6.0. See [Windows relay details](windows-relay.md) or
 [macOS relay details](macos.md#fast-focus-through-the-local-relay-macos-experimental).
 

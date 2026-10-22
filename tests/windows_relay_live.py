@@ -95,10 +95,29 @@ class ChildJob:
             self.kernel.CloseHandle(self.handle)
             self.handle = None
 
+    async def terminate(self):
+        """Wait until every owned child has exited before reusing its profile."""
+        class Accounting(ctypes.Structure):
+            _fields_ = [(name, ctypes.c_longlong) for name in ("user", "kernel", "period_user", "period_kernel")] + [
+                (name, wintypes.DWORD) for name in ("faults", "total", "active", "terminated")]
+        self.kernel.TerminateJobObject.argtypes = [wintypes.HANDLE, wintypes.UINT]
+        self.kernel.QueryInformationJobObject.argtypes = [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p,
+                                                        wintypes.DWORD, ctypes.c_void_p]
+        if not self.kernel.TerminateJobObject(self.handle, 0):
+            raise ctypes.WinError(ctypes.get_last_error())
+        def empty():
+            info = Accounting()
+            if not self.kernel.QueryInformationJobObject(self.handle, 1, ctypes.byref(info), ctypes.sizeof(info), None):
+                raise ctypes.WinError(ctypes.get_last_error())
+            return info.active == 0
+        await eventually(empty, 10)
+        self.close()
+
 
 class PrivateChrome:
-    def __init__(self, executable):
+    def __init__(self, executable, extra_args=()):
         self.executable = executable
+        self.extra_args = tuple(extra_args)
         self.temp = tempfile.TemporaryDirectory(prefix="yesdev-windows-relay-live-")
         self.profile = Path(self.temp.name)
         self.process = self.job = None
@@ -108,11 +127,19 @@ class PrivateChrome:
         (self.profile / "DevToolsActivePort").unlink(missing_ok=True)
         command = [str(self.executable), f"--user-data-dir={self.profile}", "--headless=new",
                    "--remote-debugging-port=0", "--no-first-run", "--no-default-browser-check",
-                   "--disable-background-networking", "about:blank"]
+                   "--disable-background-networking", *self.extra_args, "about:blank"]
+        # Assign the job before the browser can create children. In particular,
+        # Edge may immediately relaunch and exit its original process.
         self.process = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                                        stderr=subprocess.DEVNULL, creationflags=subprocess.CREATE_NO_WINDOW)
+                                        stderr=subprocess.DEVNULL,
+                                        creationflags=subprocess.CREATE_NO_WINDOW | 0x4)
         try:
             self.job = ChildJob(self.process)
+            resume = ctypes.WinDLL("ntdll").NtResumeProcess
+            resume.argtypes = [wintypes.HANDLE]
+            resume.restype = ctypes.c_long
+            if resume(wintypes.HANDLE(int(self.process._handle))) != 0:
+                raise RuntimeError("Cannot resume private browser")
         except BaseException:
             self.process.terminate()
             await asyncio.to_thread(self.process.wait, 10)
@@ -121,8 +148,6 @@ class PrivateChrome:
         endpoint = None
         def ready():
             nonlocal endpoint
-            if self.process.poll() is not None:
-                return True
             try:
                 # Chrome may create the file before it has finished writing
                 # and released its Windows sharing lock.
@@ -131,23 +156,22 @@ class PrivateChrome:
             except (OSError, ValueError):
                 return False
         await eventually(ready, 20)
-        if self.process.poll() is not None:
-            raise RuntimeError(f"Private Chrome exited with {self.process.returncode}")
+        # Edge's launcher can exit after it starts the browser child. The
+        # private job still owns that tree; readiness comes from its profile.
         self.launches[-1]["endpoint"] = endpoint.url
         return endpoint
 
     async def stop(self):
         if self.process is None:
             return
-        if self.process.poll() is None:
-            try:
-                async with connect(cdp_relay.read_endpoint(self.profile).url, proxy=None, open_timeout=3) as ws:
-                    await ws.send(json.dumps({"id": 1, "method": "Browser.close"}))
-                await asyncio.to_thread(self.process.wait, 8)
-            except (OSError, ValueError, ConnectionClosed, TimeoutError, subprocess.TimeoutExpired):
-                pass
+        try:
+            async with connect(cdp_relay.read_endpoint(self.profile).url, proxy=None, open_timeout=3) as ws:
+                await ws.send(json.dumps({"id": 1, "method": "Browser.close"}))
+            await asyncio.to_thread(self.process.wait, 8)
+        except (OSError, ValueError, ConnectionClosed, TimeoutError, subprocess.TimeoutExpired):
+            pass
         if self.job:
-            self.job.close()
+            await self.job.terminate()
             self.job = None
         if self.process.poll() is None:
             self.process.terminate()
@@ -155,13 +179,14 @@ class PrivateChrome:
 
     async def cleanup(self):
         await self.stop()
-        # Chrome may release profile handles just after its root process exits.
-        for attempt in range(30):
+        # Browser/cache and filesystem filter handles can outlive the process
+        # job briefly, especially when several private profiles close together.
+        for attempt in range(200):
             try:
                 self.temp.cleanup()
                 return
             except PermissionError:
-                if attempt == 29:
+                if attempt == 199:
                     raise
                 await asyncio.sleep(.1)
 

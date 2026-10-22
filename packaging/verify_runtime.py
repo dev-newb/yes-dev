@@ -31,6 +31,7 @@ def main():
         import windows_runtime
         import watcher_supervisor
         import cdp_relay
+        import cdp_multiplex
         import relay_windows
         from websockets.asyncio.client import connect
         from websockets.asyncio.server import serve
@@ -44,7 +45,7 @@ def main():
         tcl = tkinter.Tcl()
         report["tcl"] = tcl.call("info", "patchlevel")
         for name in ("yes_dev.pyw", "watcher_supervisor.py", "windows_runtime.py", "puffs.py", "burst_dialog.py",
-                     "cdp_relay.py", "relay_windows.py"):
+                     "cdp_relay.py", "cdp_multiplex.py", "relay_windows.py"):
             compile((root / "app" / name).read_text(encoding="utf-8-sig"), name, "exec")
         report.update(passed=True, dependencies=dependencies,
                       sys_path=sys.path, isolated=bool(sys.flags.isolated), openssl=ssl.OPENSSL_VERSION)

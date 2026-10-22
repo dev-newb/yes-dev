@@ -29,8 +29,9 @@ class RelayTrayTests(unittest.TestCase):
         self.paths.start()
         self.addCleanup(self.paths.stop)
         self.manager = Mock()
+        self.edge_manager = Mock()
         self.manager.status_text.return_value = 'Chrome relay: off'
-        factory = patch.object(self.module, 'RelayManager', return_value=self.manager)
+        factory = patch.object(self.module, 'RelayManager', side_effect=[self.manager, self.edge_manager])
         factory.start()
         self.addCleanup(factory.stop)
         self.app = self.module.YesDev()
@@ -100,6 +101,36 @@ class RelayTrayTests(unittest.TestCase):
                 self.assertTrue(cfg['enabled'])
         self.module.CONFIG_PATH.write_text(json.dumps({'relay_hold': True, 'relay_profile': []}))
         self.assertFalse(self.module.Config()['relay_hold'])
+
+    def test_both_relays_have_independent_controls_and_stop_together(self):
+        self.assertFalse(self.app.cfg['edge_relay_hold'])
+        self.app.cfg.update(relay_hold=True, edge_relay_hold=True)
+        self.app.sync_relay()
+        self.manager.sync.assert_called_with(True, self.app.cfg['relay_profile'], 9333)
+        self.edge_manager.sync.assert_called_with(True, self.app.cfg['edge_relay_profile'], 9334)
+        self.app.cfg['edge_relay_hold'] = False
+        self.app.sync_relay()
+        self.assertTrue(self.manager.sync.call_args.args[0])
+        self.assertFalse(self.edge_manager.sync.call_args.args[0])
+        self.app.stop_relay('test')
+        self.manager.stop.assert_called_once_with('test')
+        self.edge_manager.stop.assert_called_once_with('test')
+
+    def test_edge_validation_and_port_collision(self):
+        self.module.CONFIG_PATH.write_text(json.dumps({'relay_hold': True, 'edge_relay_hold': True,
+                                                      'relay_port': 9333, 'edge_relay_port': 9333}))
+        cfg = self.module.Config()
+        self.assertTrue(cfg['relay_hold'])
+        self.assertFalse(cfg['edge_relay_hold'])
+        for port in (True, '9334', 80, 65536):
+            self.module.CONFIG_PATH.write_text(json.dumps({'edge_relay_hold': True, 'edge_relay_port': port}))
+            self.assertFalse(self.module.Config()['edge_relay_hold'])
+
+    def test_chrome_control_failure_does_not_prevent_edge_control(self):
+        self.app.cfg['edge_relay_hold'] = True
+        self.manager.sync.side_effect = RuntimeError('Chrome failure')
+        self.app.sync_relay()
+        self.assertTrue(self.edge_manager.sync.call_args.args[0])
 
 
 if __name__ == '__main__':

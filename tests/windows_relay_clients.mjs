@@ -10,7 +10,7 @@ const version = require(`${packageName}/package.json`).version;
 let browser;
 try {
   browser = kind === 'playwright'
-    ? await library.chromium.connectOverCDP(endpoint)
+    ? await library.chromium.connectOverCDP(endpoint, {noDefaults: process.argv.includes('--shared')})
     : await library.connect({browserURL: endpoint});
   const page = kind === 'playwright'
     ? await browser.contexts()[0].newPage() : await browser.newPage();
