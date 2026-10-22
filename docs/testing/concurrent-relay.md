@@ -88,6 +88,9 @@ The native test refuses the normal desktop. It creates a fresh profile and a
 test copy of the approval supervisor with a separate mutex. It reports the
 approval count and graceful helper exit. Each browser used the 250 ms approval
 interval. This does not establish native consent results at every interval.
+The harness waits for a window before starting its supervisor. An earlier
+private Edge run failed during enumeration of the new desktop before any
+approval; the run with this start order passed.
 
 Build a private QA package with `packaging/build_windows.py`, using a new output
 directory and a numeric QA version. `--allow-dirty` is for local checks only.

@@ -117,9 +117,6 @@ async def run(args, report):
         # Connection count changes before held.release cleanup in some paths.
         await asyncio.sleep(.2)
     try:
-        supervisor = launch([sys.executable, str(copy / 'watcher_supervisor.py'),
-                             '-IntervalMs', str(args.interval), '-LogPath', str(watcher_log),
-                             '-BrowserProcess', args.browser, '-ParentPid', str(os.getpid())], 'supervisor')
         browser = launch([str(chrome_path), '--user-data-dir=' + str(profile), '--lang=en-US',
                           '--no-first-run', '--no-default-browser-check', '--disable-background-networking',
                           '--disable-sync', '--disable-component-update',
@@ -136,6 +133,15 @@ async def run(args, report):
             except (OSError, ValueError):
                 return False
         await eventually(endpoint_ready)
+        # The private desktop starts empty. Start enumeration only after it has
+        # a window; no consent is requested until the relay client connects.
+        user = ctypes.WinDLL('user32', use_last_error=True)
+        user.GetTopWindow.argtypes = [wintypes.HWND]
+        user.GetTopWindow.restype = wintypes.HWND
+        await eventually(lambda: bool(user.GetTopWindow(None)))
+        supervisor = launch([sys.executable, str(copy / 'watcher_supervisor.py'),
+                             '-IntervalMs', str(args.interval), '-LogPath', str(watcher_log),
+                             '-BrowserProcess', args.browser, '-ParentPid', str(os.getpid())], 'supervisor')
         with socket.socket() as reservation:
             reservation.bind(('127.0.0.1', 0))
             port = reservation.getsockname()[1]
