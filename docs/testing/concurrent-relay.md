@@ -41,6 +41,11 @@ a task for every message. The original limits are unchanged. A 1,200-event
 test failed before the fix and passes after it; all 171 Windows regression
 tests pass. Chrome's live profile also passed page listing and a constant
 expression with the standard MCP 1.12.0 server through an isolated fixed relay.
+The installed fix then passed four concurrent standard MCP 1.12.0 clients:
+two on Chrome with 57 listed pages and two on Edge with 14 listed pages.
+Edge's stock server initially stalled during initialization. Reactivating its
+inactive tab targets cleared that failure without a browser restart or page
+reload. This is an observed recovery, not proof of the upstream root cause.
 
 The second pass found and fixed three bugs:
 
@@ -88,7 +93,7 @@ tests macOS settings and POSIX file permissions and is outside this Windows
 run. No native macOS validation was performed. Initial runs through a virtual
 environment's Windows Python redirector timed out in lifecycle fixtures; the
 full-interpreter run above passed. A broad exploratory discovery run was stopped;
-the final 170-test run completed in about 98 seconds. The launch-primer tests
+the latest 171-test run completed in about 56 seconds. The launch-primer tests
 also passed separately on both the original release source and the new source.
 
 The live library tests used Playwright 1.62.1 and Puppeteer Core 25.14.0.

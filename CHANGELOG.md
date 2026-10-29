@@ -27,7 +27,7 @@ bypass, retained IDs after context disposal, and cleanup after a timed-out
 browser-session attachment. The load test also covers pipelined replies,
 reconnects, stalled clients, nested workers, and cross-origin iframe sessions.
 
-The isolated Windows run passed 170 regression tests. Native Chrome and Edge
+The isolated Windows run passed 171 regression tests. Native Chrome and Edge
 each needed one approval for three concurrent clients. Four independent Chrome
 DevTools MCP servers also passed together with one upstream per browser.
 See the [setup and routing guide](docs/concurrent-relay.md) and
