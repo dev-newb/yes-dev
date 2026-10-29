@@ -104,7 +104,8 @@ class MultiplexRelay(Relay):
             raw, size = await client.queue.get()
             client.queued_bytes -= size
             try:
-                await asyncio.wait_for(client.ws.send(raw), 2)
+                async with asyncio.timeout(2):
+                    await client.ws.send(raw)
             except (TimeoutError, ConnectionClosed):
                 client.ws.transport.abort()
                 return
@@ -150,6 +151,11 @@ class MultiplexRelay(Relay):
                         message.pop("sessionId", None)
                 if owner is not None:
                     self.enqueue(owner, message)
+                    if owner.queue.qsize() >= 16:
+                        # A buffered browser burst can be read without yielding.
+                        # Give healthy writers time to drain before treating the
+                        # queue as stalled. Slow clients still hit the same cap.
+                        await asyncio.sleep(0)
         except (ConnectionClosed, ValueError, TypeError):
             pass
         finally:

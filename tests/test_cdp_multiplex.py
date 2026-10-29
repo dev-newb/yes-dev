@@ -230,6 +230,23 @@ class MultiplexTests(HeldRelayFixture):
         ws.transport.abort.assert_called_once()
         self.assertEqual(client.queue.qsize(), 256)
 
+    async def test_reading_client_survives_large_browser_event_burst(self):
+        a = await self.client()
+        await self.call(a, "Test.echo")
+        owner = next(iter(self.relay.owners.values()))
+        count = 1200
+        async def receive():
+            for number in range(count):
+                event = json.loads(await asyncio.wait_for(a.recv(), 5))
+                self.assertEqual(event['params']['number'], number)
+        async def emit():
+            for number in range(count):
+                await self.chrome.sockets[0].send(json.dumps(dict(method='Test.event',
+                    sessionId=owner.root, params=dict(number=number))))
+        await asyncio.gather(receive(), emit())
+        self.assertIn('result', await self.call(a, 'Test.echo'))
+        self.assertEqual(self.chrome.connections, 1)
+
     async def test_close_cancels_pending_connection(self):
         started = asyncio.Event()
         async def blocked():

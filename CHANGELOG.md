@@ -5,6 +5,11 @@ measured - the numbers are from this repo's own runs, not estimates.
 
 ## Unreleased
 
+The concurrent relay now drains buffered startup events without treating a
+healthy client as a stalled reader. This fixes standard MCP connections to
+profiles with many existing tabs. Queue byte/count limits and slow-client
+timeouts remain in force. A 1,200-event regression test covers the failure.
+
 ### Windows: concurrent Chrome and Edge relay
 
 Several CDP clients can now share one upstream browser connection. Chrome and

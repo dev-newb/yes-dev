@@ -8,7 +8,7 @@ consent tests used private Windows desktops without switching the input desktop.
 
 | Check | Result |
 | --- | --- |
-| Windows regression set | 170 tests passed |
+| Windows regression set | 171 tests passed |
 | Chrome 155.0.8059.85 | Concurrent raw CDP, Playwright, and Puppeteer passed with one upstream |
 | Edge 155.0.4283.62 | Concurrent raw CDP, Playwright, and Puppeteer passed with one upstream |
 | Both browsers running together | Separate relays worked at the same time |
@@ -31,6 +31,16 @@ reconnect cleanup across connection generations. Host, tray, packaging,
 approval-supervisor, launch-primer, and lifecycle regression tests also passed.
 
 ## Additional fault and load checks
+
+On 29 October, connecting the standard MCP server to the live profiles exposed
+a startup-event burst bug. A healthy client could hit the 256-message output
+queue while the relay reader consumed buffered events faster than its writer
+was scheduled. The reader now gives writers a turn when the queue starts to
+fill. The writer uses an in-task timeout, so fast sends drain without spawning
+a task for every message. The original limits are unchanged. A 1,200-event
+test failed before the fix and passes after it; all 171 Windows regression
+tests pass. Chrome's live profile also passed page listing and a constant
+expression with the standard MCP 1.12.0 server through an isolated fixed relay.
 
 The second pass found and fixed three bugs:
 
