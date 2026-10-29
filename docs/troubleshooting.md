@@ -83,8 +83,8 @@ controls or relay logs.
 
 ## Windows relay does not connect
 
-- Confirm that you run v1.6.0 or newer. The v1.5.0 release does not include
-  the Windows relay. [Download and update](windows.md#update-or-switch-installations).
+- Use v1.6.2 for concurrent Chrome and Edge sharing. Version 1.6.0 has the older
+  sequential Chrome relay. [Download and update](windows.md#update-or-switch-installations).
 - Enable **On** and **Options > Keep one Chrome connection open**. Pause and
   Observe only stop the relay.
 - Point the client at the configured relay address, normally
@@ -98,9 +98,10 @@ controls or relay logs.
 
 **Listening** means the local endpoint is ready; it does not mean Chrome is
 already connected. The first client opens that connection. **Held** means the
-Chrome connection is open for reuse. A second concurrent client, browser
-restart, or failed cleanup can require another approval.
-[Complete setup and limits](windows-relay.md)
+browser connection is open for reuse. In v1.6.2, concurrent clients share it.
+Browser restart, connection loss, or failed cleanup can require another approval.
+For Edge, use its separate option, port 9334, and the log under `edge-relay`.
+[Complete setup and limits](concurrent-relay.md)
 
 ## Connection mode and focus
 
@@ -111,8 +112,11 @@ See [Chrome's debugging-switch change](https://developer.chrome.com/blog/remote-
 
 Both platforms' held-connection options apply to tools using the configured
 relay address. A tool connecting directly to Chrome can still cause another
-prompt. A second concurrent relay client can also need a separate prompt.
-Fast focus is macOS-only; the Windows relay is included from version 1.6.0. See [Windows relay details](windows-relay.md) or
+prompt. In Windows v1.6.0 and macOS held mode, a second concurrent relay client
+can also need a separate prompt. Windows v1.6.2 supports
+[concurrent Chrome and Edge sharing](concurrent-relay.md); clients on the same
+relay port share one upstream connection while it remains healthy.
+Fast focus is macOS-only; the Windows relay is included from version 1.6.0. See [Windows relay details](concurrent-relay.md) or
 [macOS relay details](macos.md#fast-focus-through-the-local-relay-macos-experimental).
 
 The upstream request for persisted approval,

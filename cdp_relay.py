@@ -140,7 +140,7 @@ class Relay:
                 read_endpoint(self.profile)
             except (OSError, ValueError):
                 return connection.respond(HTTPStatus.SERVICE_UNAVAILABLE,
-                                          "Open Chrome and enable Remote Debugging first.\n")
+                                          "Open the browser and enable Remote Debugging first.\n")
             response = connection.respond(HTTPStatus.OK, json.dumps({
                 "Browser": "Yes, Dev relay", "Protocol-Version": "1.3",
                 "webSocketDebuggerUrl": f"ws://127.0.0.1:{self.port}{RELAY_PATH}",

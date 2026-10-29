@@ -1,5 +1,9 @@
 # Keep one Chrome connection open on Windows
 
+This page describes the historical **v1.6.0** behavior. Windows **v1.6.2** adds
+[concurrent Chrome and Edge sharing](concurrent-relay.md), with separate relay
+ports and Claude/Codex routing examples. Use that guide for the current release.
+
 The Windows relay keeps one approved Chrome debugging connection open. One
 client at a time can use that connection. This reduces repeated approval prompts
 when clients connect in sequence. The feature is off by default.

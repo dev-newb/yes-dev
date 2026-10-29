@@ -141,10 +141,13 @@ async def run(args):
         if not 1024 <= args.port <= 65535:
             raise ValueError("Relay port must be from 1024 to 65535")
         if not args.profile.is_absolute():
-            raise ValueError("Chrome USER DATA directory must be an absolute path")
+            raise ValueError("Browser USER DATA directory must be an absolute path")
         parent = ParentProcess(args.parent_pid, args.parent_creation)
         # Log and status already work if the optional transport is absent.
-        from cdp_relay import Relay
+        if getattr(args, "multiplex", False):
+            from cdp_multiplex import MultiplexRelay as Relay
+        else:
+            from cdp_relay import Relay
         relay = Relay(args.profile, NoFocus(), port=args.port, status=status, hold=True)
         await relay.start()
         LOGGER.info("Listening at %s; run=%s; parent=%s", relay.address, args.run_id, args.parent_pid)
@@ -181,7 +184,7 @@ async def run(args):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--profile", type=Path, required=True, help="Chrome USER DATA directory")
+    parser.add_argument("--profile", type=Path, required=True, help="Browser USER DATA directory")
     parser.add_argument("--port", type=int, default=9333)
     parser.add_argument("--status-path", type=Path, required=True)
     parser.add_argument("--log-path", type=Path, required=True)
@@ -190,6 +193,7 @@ def main(argv=None):
     parser.add_argument("--stop-path", type=Path, required=True)
     parser.add_argument("--run-id", required=True)
     parser.add_argument("--hold", action="store_true", help="one connection is always held on Windows")
+    parser.add_argument("--multiplex", action="store_true", help="share one connection among concurrent clients")
     args = parser.parse_args(argv)
     args.log_path.parent.mkdir(parents=True, exist_ok=True)
     handler = RotatingFileHandler(args.log_path, maxBytes=1_048_576, backupCount=2, encoding="utf-8")
@@ -219,10 +223,11 @@ class RelayManager:
     START_TIMEOUT = 15.0
     RETRY_RESET_AFTER = 60.0
 
-    def __init__(self, root: Path, data_dir: Path, log=None):
+    def __init__(self, root: Path, data_dir: Path, log=None, multiplex=False):
         self.root = Path(root).resolve()
         self.data_dir = Path(data_dir).resolve()
         self.log = log or (lambda message: None)
+        self.multiplex = multiplex
         self._lock = threading.RLock()
         self._desired = None
         self._config = None
@@ -428,6 +433,8 @@ class RelayManager:
                            "--log-path", str(self.data_dir / "relay.log"),
                            "--parent-pid", str(os.getpid()), "--parent-creation", str(parent_creation()),
                            "--stop-path", str(runtime / "stop.json"), "--run-id", run_id, "--hold"]
+                if self.multiplex:
+                    command.append("--multiplex")
                 with (runtime / "stderr.log").open("ab") as stderr:
                     child = subprocess.Popen(command, cwd=self.root, stdin=subprocess.DEVNULL,
                                              stdout=subprocess.DEVNULL, stderr=stderr,
@@ -477,7 +484,7 @@ class RelayManager:
             if state.get("state") != "listening":
                 return "Relay: starting"
             if state.get("connections", 0):
-                return "Relay: client active"
+                return f"Relay: {state['connections']} client(s) active"
             held_state = state.get("held_state", "")
             if held_state in ("held", "idle", "ready") or state.get("held"):
                 return "Relay: held"

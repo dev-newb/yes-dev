@@ -5,8 +5,8 @@ Use the Microsoft .NET Framework 4.x C# compiler installed with Windows. This
 release was built with CPython 3.14.5; the manifest records the exact runtime.
 
 ```powershell
-python packaging/build_windows.py --version 1.6.0 --output C:\builds\yesdev-1.6.0
-python packaging/test_portable.py C:\builds\yesdev-1.6.0\YesDev-1.6.0-windows-x64.zip --extract-to "C:\builds\extracted with spaces"
+python packaging/build_windows.py --version 1.6.2 --output C:\builds\yesdev-1.6.2
+python packaging/test_portable.py C:\builds\yesdev-1.6.2\YesDev-1.6.2-windows-x64.zip --extract-to "C:\builds\extracted with spaces"
 ```
 
 Use an explicit real Python executable if `python` is a Windows Store alias.
@@ -27,7 +27,7 @@ bytes; the manifest and checksum identify the exact published package.
 Validate the extracted package's supervisor with real private browsers:
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File tests/run-supervisor-browser-tests.ps1 -Python "C:\builds\extracted with spaces\YesDev-1.6.0-windows-x64\runtime\python.exe" -SourcePath "C:\builds\extracted with spaces\YesDev-1.6.0-windows-x64\app\watcher.ps1" -ResultDirectory C:\builds\browser-results
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File tests/run-supervisor-browser-tests.ps1 -Python "C:\builds\extracted with spaces\YesDev-1.6.2-windows-x64\runtime\python.exe" -SourcePath "C:\builds\extracted with spaces\YesDev-1.6.2-windows-x64\app\watcher.ps1" -ResultDirectory C:\builds\browser-results
 ```
 
 These tests copy the worker/supervisor into private desktops, use fresh profiles,
@@ -40,12 +40,12 @@ and publish the ZIP, `SHA256SUMS.txt`, and a source ZIP generated with `git arch
 from the same commit. Verify the downloaded asset checksum after publication.
 The current runtime and user configuration must not be copied into the package.
 
-The Windows relay uses the shared `cdp_relay.py` core and the `relay_windows.py`
-host. Both files and `websockets==15.0.1` are included in new builds. The portable
-runtime check imports both relay modules and the websockets asyncio client and
+The Windows relays use `cdp_relay.py`, `cdp_multiplex.py`, and the `relay_windows.py`
+host. All three files and `websockets==15.0.1` are included in new builds. The portable
+runtime check imports all relay modules and the websockets asyncio client and
 server APIs, then checks all dependency versions against the package pins. It
 does not start the relay, tray, or a browser. The relay is off by default; the
-portable README gives the opt-in steps and the Chrome User Data path setting.
+portable README gives the opt-in steps and the Chrome/Edge User Data settings.
 
 Run the non-native package checks before building:
 

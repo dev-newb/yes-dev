@@ -10,9 +10,9 @@ Yes, Dev answers matching **Allow remote debugging?** prompts so local automatio
 tools can connect without waiting for a manual click. It runs on Windows and
 macOS. Windows has a portable ZIP; macOS uses the Python source app.
 
-**[Download Windows x64 v1.6.0](https://github.com/dev-newb/yes-dev/releases/download/v1.6.0/YesDev-1.6.0-windows-x64.zip)**
-· [Release notes and checksums](https://github.com/dev-newb/yes-dev/releases/tag/v1.6.0)
-· [Source ZIP](https://github.com/dev-newb/yes-dev/archive/refs/tags/v1.6.0.zip)
+**[Download Windows x64 v1.6.2](https://github.com/dev-newb/yes-dev/releases/download/v1.6.2/YesDev-1.6.2-windows-x64.zip)**
+· [Release notes and checksums](https://github.com/dev-newb/yes-dev/releases/tag/v1.6.2)
+· [Source ZIP](https://github.com/dev-newb/yes-dev/releases/download/v1.6.2/YesDev-1.6.2-source.zip)
 
 Auto-approval lets local programs request debugging access to your signed-in
 browser. Yes, Dev matches the consent dialog; it does not identify or authorize
@@ -70,20 +70,19 @@ The Windows tray exposes approval settings directly. On macOS, they are in
 | **Include Microsoft Edge** | Include Edge consent dialogs. |
 | **Open startup/exit records** | Windows lifecycle diagnostics. |
 
-### Keep one Chrome connection open on Windows
+### Share one connection per browser on Windows
 
-**Windows v1.6.0 includes the relay** in both the ready-to-run ZIP and source
-package. Download the release above, extract it, and start `YesDev.exe`.
+**Windows v1.6.2** supports concurrent clients on one upstream connection per
+browser. Enable **Options > Keep one Chrome connection open** and/or
+**Keep one Edge connection open**, then point your CDP tools at
+`http://127.0.0.1:9333` for Chrome or `http://127.0.0.1:9334` for Edge.
+To approve Edge prompts automatically, also select **Include Microsoft Edge**.
 
-Enable **Options > Keep one Chrome connection open**, then point your CDP tool
-at `http://127.0.0.1:9333`. The first client opens the Chrome connection; later
-clients can reuse it. A concurrent client gets a separate connection and can
-need another approval. Direct Chrome connections do not use the relay.
-
-The option is off by default. It stops on Off, pause, Observe only, or Quit, and
-leaves Chrome running. Use the relay status row and **Open relay log** to check
-it. Windows focus restoration is not included.
-[Profile setup, client examples, and limits](docs/windows-relay.md)
+The first client can need an approval. Later clients share that connection,
+including concurrent clients. Direct browser connections do not use the relay.
+Each relay is off by default and stops on Off, pause, Observe only, or Quit.
+Browsers stay open. Windows focus restoration is not included.
+[Profile setup, Claude/Codex routing, and limits](docs/concurrent-relay.md)
 
 ### Approval defaults
 
@@ -109,7 +108,7 @@ In **Settings… > Focus & connection**, choose:
   need another connection and prompt.
 
 These options are off by default. Quiet focus and Fast focus remain
-**macOS-only**. Windows connection reuse is included in v1.6.0, as described
+**macOS-only**. Windows concurrent connection sharing is included in v1.6.2, as described
 above. Input can cancel the macOS focus return;
 a brief interruption or Space switch can still occur.
 The relay stays resident while enabled and stops with the app, a pause, or

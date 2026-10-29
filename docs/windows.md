@@ -4,7 +4,7 @@
 
 ## Portable app
 
-Download [YesDev-1.6.0-windows-x64.zip](https://github.com/dev-newb/yes-dev/releases/download/v1.6.0/YesDev-1.6.0-windows-x64.zip)
+Download [YesDev-1.6.2-windows-x64.zip](https://github.com/dev-newb/yes-dev/releases/download/v1.6.2/YesDev-1.6.2-windows-x64.zip)
 and extract the whole folder to a permanent location. Open `YesDev.exe`.
 Keep `app` and `runtime` beside the launcher. Python, Tcl/Tk, and the app
 dependencies are included. No Python or pip installation is needed.
@@ -12,7 +12,7 @@ dependencies are included. No Python or pip installation is needed.
 The package requires Windows 10/11 x64, the normal desktop Explorer shell,
 Windows PowerShell 5.1, and .NET Framework 4.x. The launcher is unsigned.
 Normal use does not require administrator rights. You can compare the ZIP
-against the release's [SHA256SUMS.txt](https://github.com/dev-newb/yes-dev/releases/download/v1.6.0/SHA256SUMS.txt).
+against the release's [SHA256SUMS.txt](https://github.com/dev-newb/yes-dev/releases/download/v1.6.2/SHA256SUMS.txt).
 The included manifest identifies the source commit and payload files.
 
 Right-click the tray icon and enable **Start at login** if wanted. It creates
@@ -42,7 +42,7 @@ app is running does not make it load the new code.
 ## Source installation
 
 Use a real Windows Python 3.9+ interpreter and Windows PowerShell 5.1. Download
-the [v1.6.0 source ZIP](https://github.com/dev-newb/yes-dev/archive/refs/tags/v1.6.0.zip)
+the [v1.6.2 source ZIP](https://github.com/dev-newb/yes-dev/releases/download/v1.6.2/YesDev-1.6.2-source.zip)
 or clone the repository, then run these commands from the source folder.
 
 ```powershell
@@ -55,29 +55,36 @@ interpreter. For a Git installation, quit the tray and run `git pull --ff-only`,
 then install requirements again and start the app. A source ZIP update replaces
 the old source files; it does not require deleting the user data folder.
 
-## Keep one Chrome connection open
+## Share one connection per browser
 
-Version 1.6.0 includes an optional relay for sequential Chrome debugging
-clients in both the portable app and source package.
+Version 1.6.2 includes independent Chrome and Edge relays. Several clients can
+share each browser's upstream connection at the same time.
 
-1. Enable Chrome remote debugging at `chrome://inspect/#remote-debugging`.
-2. Select **Options > Keep one Chrome connection open** in the tray.
-3. Connect your browser tool to `http://127.0.0.1:9333`.
+1. Enable remote debugging at `chrome://inspect/#remote-debugging` or
+   `edge://inspect/#remote-debugging`.
+2. Select **Options > Keep one Chrome connection open** and/or
+   **Keep one Edge connection open** in the tray. Select **Include Microsoft
+   Edge** as well if Yes, Dev should approve Edge prompts.
+3. Connect your browser tool to `http://127.0.0.1:9333` for Chrome or
+   `http://127.0.0.1:9334` for Edge.
 
 The default Chrome User Data directory is
 `%LOCALAPPDATA%\Google\Chrome\User Data`. It must contain Chrome's
 `DevToolsActivePort` file. For another directory or port, use **Open config**,
 quit Yes, Dev, change `relay_profile` or `relay_port`, then restart it.
 
-The first client can need an approval. Later sequential clients reuse that
-connection. A concurrent client gets a separate connection and can need another
-approval. The relay is off by default and stops on Off, pause, Observe only,
-Quit, or loss of its parent tray process. It leaves Chrome running.
+Edge defaults to `%LOCALAPPDATA%\Microsoft\Edge\User Data`; its configuration
+keys are `edge_relay_profile` and `edge_relay_port`.
+
+The first client can need an approval. Later clients share that connection,
+including concurrent clients. Both relays are off by default and stop on Off,
+pause, Observe only, Quit, or loss of the parent tray process. Browsers stay open.
+Connection loss or failed cleanup can require a new approval.
 
 Use the status row and **Open relay log** for connection errors. Quiet focus,
 Fast focus, and launch-time connection opening remain macOS features. The
 Windows relay does not change an existing Chrome DevTools MCP bridge or its
-scheduled task. [Client examples, settings, and limits](windows-relay.md)
+scheduled task. [Client examples, settings, and limits](concurrent-relay.md)
 
 ## Diagnostics and supported mode
 
@@ -94,7 +101,7 @@ For a portable-runtime check that does not start the tray or approve anything:
 Read `runtime-check.json` beside the launcher. Keep that check separate from
 approval testing; successful imports do not prove a browser connection.
 
-Version 1.6.0 supports English and Simplified Chinese consent titles and Allow
+Version 1.6.2 supports English and Simplified Chinese consent titles and Allow
 labels, and includes the optional Windows relay described above.
 
 Cloud notices use the primary monitor and have limited multi-monitor/DPI test

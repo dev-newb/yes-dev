@@ -24,13 +24,15 @@ as a source installation. Quit the previous copy before switching installations.
 Use "Open startup/exit records" for lifecycle diagnostics. A record can give the
 exit code and last heartbeat; it cannot always identify an external terminator.
 
-Optional local Chrome relay
+Optional local Chrome and Edge relays
 
-"Keep one Chrome connection open" is off by default. Enable it in the tray menu
-to use the local relay. It runs while Yes, Dev is enabled and is not paused or in
-observe mode. CDP clients must connect through http://127.0.0.1:9333, or use the
-WebSocket URL returned by that address. Direct Chrome connections do not use the
-relay. Only local clients can connect.
+"Keep one Chrome connection open" and "Keep one Edge connection open" are off by
+default. Enable the required options in the tray menu. To approve Edge prompts,
+also enable "Include Microsoft Edge". The relays run while Yes, Dev is enabled
+and is not paused or in observe mode. CDP clients must connect through
+http://127.0.0.1:9333 for Chrome or http://127.0.0.1:9334 for Edge, or use the
+WebSocket URL returned by that address. Direct browser connections do not use
+the relays. Only local clients can connect.
 
 The relay reads Chrome's DevToolsActivePort file from the Chrome User Data
 directory. The default is %LOCALAPPDATA%\Google\Chrome\User Data. For another
@@ -41,11 +43,21 @@ Chrome must expose its DevToolsActivePort file for that directory. The relay doe
 not start Chrome or change Chrome settings. Set "relay_port" in the same config
 file if port 9333 is already in use; point clients at the selected port.
 
-The first client request opens the held Chrome connection. The relay keeps that
-socket for sequential client sessions. A concurrent client uses its own Chrome
-socket. Chrome can still ask for permission. The relay does not restore Windows
-focus after a permission prompt. Use the relay status row and "Open relay log"
-in the tray menu to inspect its state.
+Edge defaults to %LOCALAPPDATA%\Microsoft\Edge\User Data. Use
+"edge_relay_profile" and "edge_relay_port" to change its directory and port.
+Both browsers must have remote debugging enabled through their inspect page.
+
+The first client request opens the browser connection. Concurrent and later
+clients share that one socket. Browser restart, connection loss, or cleanup
+failure can require another approval. The relay does not restore Windows focus.
+Use the separate status rows and relay log items in the tray to inspect state.
+
+Playwright 1.60+ connections need noDefaults: true. Raw CDP attachment requires
+flatten: true. Browser.close disconnects its caller and leaves the browser open.
+Tabs and edits remain shared. Browser-wide tracing and default-context download
+or permission changes are not supported. Use client-owned contexts for downloads
+and permissions. Claude/Codex examples and the complete limits are at:
+https://github.com/dev-newb/yes-dev/blob/v1.6.2/docs/concurrent-relay.md
 
 For a runtime-only check, run YesDev.exe --check-runtime. It writes
 runtime-check.json in this folder without starting the tray or approving prompts.
