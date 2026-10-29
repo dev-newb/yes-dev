@@ -5,6 +5,8 @@ measured - the numbers are from this repo's own runs, not estimates.
 
 ## Unreleased
 
+## 1.6.2 - 2026-10-29
+
 The concurrent relay now drains buffered startup events without treating a
 healthy client as a stalled reader. This fixes standard MCP connections to
 profiles with many existing tabs. Queue byte/count limits and slow-client
@@ -31,8 +33,8 @@ The isolated Windows run passed 171 regression tests. Native Chrome and Edge
 each needed one approval for three concurrent clients. Four independent Chrome
 DevTools MCP servers also passed together with one upstream per browser.
 See the [setup and routing guide](docs/concurrent-relay.md) and
-[test record](docs/testing/concurrent-relay.md). The published v1.6.0 ZIP and
-macOS held-connection behavior are unchanged by this source entry.
+[test record](docs/testing/concurrent-relay.md). This is a Windows release;
+macOS held-connection behavior is unchanged, with no new native macOS test run.
 
 ## 1.6.0 - 2026-10-19
 

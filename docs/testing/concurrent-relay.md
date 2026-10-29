@@ -1,14 +1,14 @@
-# Concurrent relay test record — 2026-10-22
+# Concurrent relay test record — 22–29 October 2026
 
 The feature was built in a separate checkout on Windows. Tests used new
 browser profiles, private process jobs, and separate relay ports. Native
 consent tests used private Windows desktops without switching the input desktop.
 
-## Results
+## Original isolated results — 22 October
 
 | Check | Result |
 | --- | --- |
-| Windows regression set | 171 tests passed |
+| Windows regression set | 170 tests passed |
 | Chrome 155.0.8059.85 | Concurrent raw CDP, Playwright, and Puppeteer passed with one upstream |
 | Edge 155.0.4283.62 | Concurrent raw CDP, Playwright, and Puppeteer passed with one upstream |
 | Both browsers running together | Separate relays worked at the same time |
@@ -142,7 +142,10 @@ approval; the run with this start order passed.
 Build a private QA package with `packaging/build_windows.py`, using a new output
 directory and a numeric QA version. `--allow-dirty` is for local checks only.
 The package's `--check-runtime` path tests imports without starting the tray.
-No package from this work was installed, tagged, or published as a release.
+The original 22 October QA packages were not installed or published. On
+29 October, a local v1.6.2 build with the startup-event fix was installed for
+the live-profile MCP checks described above. The official release package is
+built separately from the merged commit; it does not replace a running app.
 
 ## Limits
 

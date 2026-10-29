@@ -1,9 +1,10 @@
 # Concurrent Chrome and Edge relay on Windows
 
-Current source adds concurrent CDP sharing. This change is not in the published
-v1.6.0 ZIP. Each browser has one upstream WebSocket and its own local port.
-Several clients can use each port at the same time. Both options are off by
-default. The existing `relay_hold` setting now selects concurrent Chrome sharing.
+Windows **v1.6.2** includes concurrent CDP sharing in the
+[ready-to-run ZIP](https://github.com/dev-newb/yes-dev/releases/download/v1.6.2/YesDev-1.6.2-windows-x64.zip)
+and source package. Each browser has one upstream WebSocket and its own local
+port. Several clients can use each port at the same time. Both options are off
+by default. The existing `relay_hold` setting selects concurrent Chrome sharing.
 The macOS relay keeps its existing behavior.
 
 ## Set up the browser connections
